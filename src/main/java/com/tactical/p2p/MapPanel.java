@@ -187,16 +187,18 @@ public class MapPanel extends JPanel {
         hoveredPoint = null;
         hoveredIsHost = false;
 
-        // Check all points
-        for (Point p : hostPoints) {
-            if (isPointHit(p, x, y)) {
-                hoveredPoint = p;
-                hoveredIsHost = true;
-                break;
+        // Only show hover effect on own points (the ones you can delete)
+        if (isHost) {
+            // Host can only hover over host (blue) points
+            for (Point p : hostPoints) {
+                if (isPointHit(p, x, y)) {
+                    hoveredPoint = p;
+                    hoveredIsHost = true;
+                    break;
+                }
             }
-        }
-
-        if (hoveredPoint == null) {
+        } else {
+            // Client can only hover over client (red) points
             for (Point p : clientPoints) {
                 if (isPointHit(p, x, y)) {
                     hoveredPoint = p;
