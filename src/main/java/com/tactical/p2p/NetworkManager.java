@@ -78,6 +78,9 @@ public class NetworkManager {
     /** Callback invoked when text is received from the peer */
     private Consumer<String> onTextReceived;
 
+    /** Callback invoked when a point is received from the peer */
+    private Consumer<PointMessage> onPointReceived;
+
     /** Callback invoked when connection status changes */
     private Consumer<ConnectionStatus> onStatusChanged;
 
@@ -109,6 +112,62 @@ public class NetworkManager {
         }
     }
 
+    // ==================== Point Message Class ====================
+
+    /**
+     * Represents a point message for map synchronization.
+     * Contains the point coordinates, action (add/remove), and sender type.
+     */
+    public static class PointMessage {
+        public enum Action { ADD, REMOVE }
+
+        private final double x;
+        private final double y;
+        private final Action action;
+        private final boolean fromHost;
+
+        public PointMessage(double x, double y, Action action, boolean fromHost) {
+            this.x = x;
+            this.y = y;
+            this.action = action;
+            this.fromHost = fromHost;
+        }
+
+        public double getX() { return x; }
+        public double getY() { return y; }
+        public Action getAction() { return action; }
+        public boolean isFromHost() { return fromHost; }
+
+        /**
+         * Serializes the point message to a string for network transmission.
+         * Format: POINT:ADD:x:y:fromHost or POINT:REMOVE:x:y:fromHost
+         */
+        public String serialize() {
+            return String.format("POINT:%s:%.4f:%.4f:%b", action.name(), x, y, fromHost);
+        }
+
+        /**
+         * Deserializes a point message from a string.
+         * @param data The serialized string
+         * @return PointMessage or null if parsing fails
+         */
+        public static PointMessage deserialize(String data) {
+            try {
+                String[] parts = data.split(":");
+                if (parts.length != 5 || !parts[0].equals("POINT")) {
+                    return null;
+                }
+                Action action = Action.valueOf(parts[1]);
+                double x = Double.parseDouble(parts[2]);
+                double y = Double.parseDouble(parts[3]);
+                boolean fromHost = Boolean.parseBoolean(parts[4]);
+                return new PointMessage(x, y, action, fromHost);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+    }
+
     // ==================== Constructor ====================
 
     /**
@@ -130,6 +189,16 @@ public class NetworkManager {
      */
     public void setOnTextReceived(Consumer<String> callback) {
         this.onTextReceived = callback;
+    }
+
+    /**
+     * Sets the callback for received point messages.
+     * The callback will be invoked on the EDT via SwingUtilities.invokeLater().
+     *
+     * @param callback Function to process received points
+     */
+    public void setOnPointReceived(Consumer<PointMessage> callback) {
+        this.onPointReceived = callback;
     }
 
     /**
@@ -296,8 +365,9 @@ public class NetworkManager {
      * Starts the main receiver loop on the current thread.
      * This method blocks until the connection is closed or an error occurs.
      *
-     * Protocol: Each line is a complete message (newline-delimited UTF-8).
-     * Escaped newlines (\\n literal) are converted back to actual newlines.
+     * Protocol:
+     * - TEXT messages: Regular text with escaped newlines
+     * - POINT messages: Format "POINT:ADD/REMOVE:x:y:fromHost"
      */
     private void startReceiverLoop() {
         receiverThread = new Thread(() -> {
@@ -319,7 +389,19 @@ public class NetworkManager {
                         continue;
                     }
 
-                    // Unescape newlines: convert \\n literal back to actual \n
+                    // Check if this is a point message
+                    if (receivedLine.startsWith("POINT:")) {
+                        PointMessage pointMsg = PointMessage.deserialize(receivedLine);
+                        if (pointMsg != null && onPointReceived != null) {
+                            System.out.println("[NetworkManager] Received point: (" + pointMsg.getX() + ", " + pointMsg.getY() + ")");
+                            javax.swing.SwingUtilities.invokeLater(() -> {
+                                onPointReceived.accept(pointMsg);
+                            });
+                        }
+                        continue;
+                    }
+
+                    // Handle text message - unescape newlines
                     String unescapedText = receivedLine.replace("\\n", "\n").replace("\\\\", "\\");
 
                     System.out.println("[NetworkManager] Received: " + unescapedText.length() + " chars");
@@ -389,6 +471,40 @@ public class NetworkManager {
 
         } catch (IOException e) {
             System.err.println("[NetworkManager] Send error: " + e.getMessage());
+            notifyStatusChanged(ConnectionStatus.ERROR);
+            cleanup();
+            return false;
+        }
+    }
+
+    /**
+     * Sends a point message to the connected peer.
+     * This method is thread-safe and can be called from any thread (typically EDT).
+     *
+     * @param point The point to send
+     * @param action ADD or REMOVE
+     * @param isFromHost true if this point is from the host
+     * @return true if the send was successful, false otherwise
+     */
+    public synchronized boolean sendPoint(Point point, PointMessage.Action action, boolean isFromHost) {
+        if (!connected.get() || writer == null) {
+            System.err.println("[NetworkManager] Cannot send point - not connected");
+            return false;
+        }
+
+        try {
+            PointMessage msg = new PointMessage(point.getX(), point.getY(), action, isFromHost);
+            String serialized = msg.serialize();
+
+            writer.write(serialized);
+            writer.newLine();
+            writer.flush();
+
+            System.out.println("[NetworkManager] Sent point: (" + point.getX() + ", " + point.getY() + ") " + action);
+            return true;
+
+        } catch (IOException e) {
+            System.err.println("[NetworkManager] Send point error: " + e.getMessage());
             notifyStatusChanged(ConnectionStatus.ERROR);
             cleanup();
             return false;

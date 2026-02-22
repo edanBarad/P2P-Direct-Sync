@@ -85,8 +85,14 @@ Super simple:
 
 ## Features
 
+- **Text Board**: Real-time synchronized text editor
+- **Shared Map**: Click to add pins, right-click to delete
+  - Host pins are blue, Client pins are red
+  - Pins sync instantly between instances
+- Each user can switch between Text Board and Map freely
 - [x] Two instances can connect
 - [x] Real-time text sync both ways
+- [x] Shared map with point synchronization
 - [x] Handles multiline text
 - [x] Graceful disconnect (no crashes)
 - [x] Connection status indicator
