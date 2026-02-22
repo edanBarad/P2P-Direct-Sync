@@ -1,6 +1,6 @@
 # P2P Shared Board
 
-![Screenshot](screenshot.png)
+<img width="1916" height="1012" alt="image" src="https://github.com/user-attachments/assets/522bbf6b-236f-44ae-b97e-a264c0ec732e" />
 
 ## About this project
 
