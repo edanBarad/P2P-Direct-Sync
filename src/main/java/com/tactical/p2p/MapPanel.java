@@ -146,29 +146,32 @@ public class MapPanel extends JPanel {
     }
 
     private void tryDeletePointAt(int x, int y) {
-        // Check host points first
-        for (int i = hostPoints.size() - 1; i >= 0; i--) {
-            Point p = hostPoints.get(i);
-            if (isPointHit(p, x, y)) {
-                hostPoints.remove(i);
-                repaint();
-                if (onPointRemoved != null) {
-                    onPointRemoved.accept(new PointRemovalInfo(p, true));
+        // Each user can only delete their own points
+        if (isHost) {
+            // Host can only delete host (blue) points
+            for (int i = hostPoints.size() - 1; i >= 0; i--) {
+                Point p = hostPoints.get(i);
+                if (isPointHit(p, x, y)) {
+                    hostPoints.remove(i);
+                    repaint();
+                    if (onPointRemoved != null) {
+                        onPointRemoved.accept(new PointRemovalInfo(p, true));
+                    }
+                    return;
                 }
-                return;
             }
-        }
-
-        // Check client points
-        for (int i = clientPoints.size() - 1; i >= 0; i--) {
-            Point p = clientPoints.get(i);
-            if (isPointHit(p, x, y)) {
-                clientPoints.remove(i);
-                repaint();
-                if (onPointRemoved != null) {
-                    onPointRemoved.accept(new PointRemovalInfo(p, false));
+        } else {
+            // Client can only delete client (red) points
+            for (int i = clientPoints.size() - 1; i >= 0; i--) {
+                Point p = clientPoints.get(i);
+                if (isPointHit(p, x, y)) {
+                    clientPoints.remove(i);
+                    repaint();
+                    if (onPointRemoved != null) {
+                        onPointRemoved.accept(new PointRemovalInfo(p, false));
+                    }
+                    return;
                 }
-                return;
             }
         }
     }
@@ -229,14 +232,16 @@ public class MapPanel extends JPanel {
 
     /**
      * Removes a point received from the remote peer.
-     * Searches both host and client points since either side can delete any point.
+     * Since each user can only delete their own points, fromHost indicates
+     * which list to remove from.
      */
     public void removeRemotePoint(double x, double y, boolean fromHost) {
         SwingUtilities.invokeLater(() -> {
             Point target = new Point(x, y);
-            // Search both lists - the point could be from either side
-            boolean removed = hostPoints.removeIf(p -> p.equals(target));
-            if (!removed) {
+            // Remove from the correct list based on who owned the point
+            if (fromHost) {
+                hostPoints.removeIf(p -> p.equals(target));
+            } else {
                 clientPoints.removeIf(p -> p.equals(target));
             }
             repaint();
