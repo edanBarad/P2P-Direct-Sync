@@ -56,7 +56,12 @@ src/main/java/com/tactical/p2p/
 ├── App.java            # Main class, handles startup
 ├── StateModel.java     # Stores the text state
 ├── NetworkManager.java # Socket stuff (sending/receiving)
-└── SyncBoardUI.java    # The GUI (Swing)
+├── SyncBoardUI.java    # The GUI (Swing)
+├── MapPanel.java       # Map view with clickable points
+└── Point.java          # 2D point with distance/equals methods
+
+src/main/resources/
+└── map.jpg             # The map background image
 ```
 
 ## Design stuff
@@ -78,24 +83,36 @@ This is important because blocking the EDT with socket operations would make the
 
 ## Network protocol
 
-Super simple:
-- Uses TCP sockets on port 8888
-- Messages are UTF-8 strings ending with newline
-- Newlines in text are escaped as `\n` so they don't break the protocol
+Uses TCP sockets on port 8888. Messages are UTF-8 strings ending with newline.
+
+### Text messages
+- Plain text with newlines escaped as `\n` literal
+- Example: `Hello\nWorld` (multiline text)
+
+### Point messages
+- Format: `POINT:ACTION:x:y:fromHost`
+- ACTION is either `ADD` or `REMOVE`
+- Example: `POINT:ADD:150.0:200.0:true` (host adds point at 150,200)
 
 ## Features
 
-- **Text Board**: Real-time synchronized text editor
-- **Shared Map**: Click to add pins, right-click to delete
-  - Host pins are blue, Client pins are red
-  - Pins sync instantly between instances
-- Each user can switch between Text Board and Map freely
-- [x] Two instances can connect
-- [x] Real-time text sync both ways
-- [x] Shared map with point synchronization
-- [x] Handles multiline text
-- [x] Graceful disconnect (no crashes)
-- [x] Connection status indicator
+### Text Board
+- Real-time synchronized text editor
+- Type in your local panel, appears instantly on peer's remote panel
+- Supports multiline text
+
+### Shared Map
+- **Left-click** on the map to add a pin
+- **Right-click** on your own pin to delete it
+- Host pins are **blue**, Client pins are **red**
+- You can only delete your own pins (hover "X" only shows on your color)
+- All pins sync in real-time between instances
+- Each user can freely switch between Text Board and Map tabs
+
+### General
+- Two instances connect via TCP sockets
+- Graceful disconnect handling (no crashes)
+- Connection status indicator in status bar
 
 ## Possible improvements
 
