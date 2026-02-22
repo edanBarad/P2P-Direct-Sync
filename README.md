@@ -1,6 +1,12 @@
 # P2P Shared Board
 
-A simple peer-to-peer text sharing app using raw TCP sockets. Two instances can connect and share text in real-time.
+![Screenshot](screenshot.png)
+
+## About this project
+
+As a second-year CS student, I built this project to showcase what I've learned so far in school — **Java**, **OOP design patterns**, and **network socket programming**. The goal was to create something that ties these concepts together in a practical way.
+
+I also used **AI-assisted context engineering** to speed up development. By providing clear requirements and constraints to an AI model, I was able to focus on understanding the architecture while getting help with boilerplate code and documentation. It's like pair programming with a very patient partner who never gets tired of explaining threading models.
 
 ## How it works
 
