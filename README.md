@@ -1,0 +1,99 @@
+# P2P Shared Board
+
+A simple peer-to-peer text sharing app using raw TCP sockets. Two instances can connect and share text in real-time.
+
+## How it works
+
+One instance runs as a **Host** (server) and waits for a connection. The other runs as a **Client** and connects to the host. Whatever you type in your bottom text area shows up in the other person's top text area.
+
+```
+┌─────────────────┐         ┌─────────────────┐
+│  Instance A     │         │  Instance B     │
+│  ┌───────────┐  │         │  ┌───────────┐  │
+│  │ Remote    │◄─┼─────────┼─►│ Local     │  │
+│  │ (receive) │  │  TCP    │  │ (type)    │  │
+│  ├───────────┤  │  Socket │  ├───────────┤  │
+│  │ Local     │──┼─────────┼──►│ Remote    │  │
+│  │ (type)    │  │         │  │ (receive) │  │
+│  └───────────┘  │         │  └───────────┘  │
+└─────────────────┘         └─────────────────┘
+```
+
+## Requirements
+
+- Java 11 or 17
+- No external libraries needed
+
+## How to run
+
+### Compile
+```bash
+javac -d target/classes src/main/java/com/tactical/p2p/*.java
+```
+
+### Run two instances
+
+Terminal 1 (Host):
+```bash
+java -cp target/classes com.tactical.p2p.App host
+```
+
+Terminal 2 (Client):
+```bash
+java -cp target/classes com.tactical.p2p.App client
+```
+
+Or just run without args and pick from the GUI dialog.
+
+## Project structure
+
+```
+src/main/java/com/tactical/p2p/
+├── App.java            # Main class, handles startup
+├── StateModel.java     # Stores the text state
+├── NetworkManager.java # Socket stuff (sending/receiving)
+└── SyncBoardUI.java    # The GUI (Swing)
+```
+
+## Design stuff
+
+### Threading
+- **EDT (Event Dispatch Thread)**: Handles all GUI updates
+- **Background threads**: Handle network I/O so the UI doesn't freeze
+
+This is important because blocking the EDT with socket operations would make the GUI unresponsive.
+
+### Patterns used
+- **Observer Pattern**: StateModel notifies listeners when data changes
+- **MVC-ish**: StateModel is the model, SyncBoardUI is view/controller
+- **Dependency Injection**: Pass dependencies via constructor instead of creating them inside
+
+### SOLID principles
+- **SRP**: Each class does one thing (network, state, or UI)
+- **DIP**: Classes depend on abstractions, not concrete implementations
+
+## Network protocol
+
+Super simple:
+- Uses TCP sockets on port 8888
+- Messages are UTF-8 strings ending with newline
+- Newlines in text are escaped as `\n` so they don't break the protocol
+
+## Features
+
+- [x] Two instances can connect
+- [x] Real-time text sync both ways
+- [x] Handles multiline text
+- [x] Graceful disconnect (no crashes)
+- [x] Connection status indicator
+
+## Possible improvements
+
+- Add encryption
+- Support more than 2 peers
+- Add file sharing
+- Use WebSockets for browser support
+
+---
+
+Made for a distributed systems learning project.
