@@ -1,5 +1,4 @@
 # P2P Shared Board
-<img width="1916" height="1012" alt="Screenshot 2026-02-22 115055" src="https://github.com/user-attachments/assets/6ead2e44-4168-49f8-b853-7405e2690986" />
 
 ## About this project
 
@@ -99,6 +98,7 @@ Super simple:
 - Add file sharing
 - Use WebSockets for browser support
 
----
+<img width="1916" height="1012" alt="Screenshot 2026-02-22 115055" src="https://github.com/user-attachments/assets/6ead2e44-4168-49f8-b853-7405e2690986" />
+
 
 Made for a distributed systems learning project.
