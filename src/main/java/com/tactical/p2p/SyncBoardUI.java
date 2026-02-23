@@ -38,7 +38,7 @@ public class SyncBoardUI {
     private JTextArea bottomTextArea;
 
     // Map components
-    private MapPanel mapPanel;
+    private MapScreen mapScreen;
 
     // Status bar
     private JLabel statusLabel;
@@ -196,29 +196,29 @@ public class SyncBoardUI {
     private JPanel createMapPanel() {
         JPanel wrapper = new JPanel(new BorderLayout());
 
-        // Create map panel
-        mapPanel = new MapPanel();
-        mapPanel.setIsHost(isHost);
+        // Create map screen
+        mapScreen = new MapScreen();
+        mapScreen.setIsHost(isHost);
 
         // Add instructions label
-        JLabel instructions = new JLabel(" Left-click to add point | Right-click on point to delete");
+        JLabel instructions = new JLabel(" Left-click to add point (auto-connects to nearest) | Right-click to delete");
         instructions.setForeground(Color.DARK_GRAY);
         instructions.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
 
-        wrapper.add(mapPanel, BorderLayout.CENTER);
+        wrapper.add(mapScreen, BorderLayout.CENTER);
         wrapper.add(instructions, BorderLayout.SOUTH);
 
         // Set up point callbacks
-        mapPanel.setOnPointAdded(point -> {
+        mapScreen.setOnPointAdded(point -> {
             if (networkManager.isConnected()) {
                 networkManager.sendPoint(point, NetworkManager.PointMessage.Action.ADD, isHost);
             }
         });
 
-        mapPanel.setOnPointRemoved(removalInfo -> {
+        mapScreen.setOnPointRemoved(point -> {
             if (networkManager.isConnected()) {
-                // Send the actual owner of the point (wasHostPoint), not who deleted it
-                networkManager.sendPoint(removalInfo.point, NetworkManager.PointMessage.Action.REMOVE, removalInfo.wasHostPoint);
+                // For removal, we don't need to track ownership - both sides can delete any point
+                networkManager.sendPoint(point, NetworkManager.PointMessage.Action.REMOVE, isHost);
             }
         });
 
@@ -255,11 +255,11 @@ public class SyncBoardUI {
 
         // Handle received points
         networkManager.setOnPointReceived(pointMsg -> {
-            if (mapPanel != null) {
+            if (mapScreen != null) {
                 if (pointMsg.getAction() == NetworkManager.PointMessage.Action.ADD) {
-                    mapPanel.addRemotePoint(pointMsg.getX(), pointMsg.getY(), pointMsg.isFromHost());
+                    mapScreen.addRemotePoint(pointMsg.getX(), pointMsg.getY(), pointMsg.isFromHost());
                 } else {
-                    mapPanel.removeRemotePoint(pointMsg.getX(), pointMsg.getY(), pointMsg.isFromHost());
+                    mapScreen.removeRemotePoint(pointMsg.getX(), pointMsg.getY());
                 }
             }
         });
