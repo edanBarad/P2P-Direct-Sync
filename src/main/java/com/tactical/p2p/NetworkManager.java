@@ -81,6 +81,15 @@ public class NetworkManager {
     /** Callback invoked when a point is received from the peer */
     private Consumer<PointMessage> onPointReceived;
 
+    /** Callback invoked when a path is received from the peer */
+    private Consumer<PathMessage> onPathReceived;
+
+    /** Callback invoked when an edge is received from the peer */
+    private Consumer<EdgeMessage> onEdgeReceived;
+
+    /** Callback invoked when path removal is received */
+    private Consumer<Integer> onPathRemoved;
+
     /** Callback invoked when connection status changes */
     private Consumer<ConnectionStatus> onStatusChanged;
 
@@ -168,6 +177,89 @@ public class NetworkManager {
         }
     }
 
+    // ==================== Path Message Class ====================
+
+    /**
+     * Represents a path message for path synchronization.
+     * Contains source and destination point coordinates.
+     */
+    public static class PathMessage {
+        private final double sourceX, sourceY;
+        private final double destX, destY;
+
+        public PathMessage(double sourceX, double sourceY, double destX, double destY) {
+            this.sourceX = sourceX;
+            this.sourceY = sourceY;
+            this.destX = destX;
+            this.destY = destY;
+        }
+
+        public double getSourceX() { return sourceX; }
+        public double getSourceY() { return sourceY; }
+        public double getDestX() { return destX; }
+        public double getDestY() { return destY; }
+
+        /**
+         * Serializes the path message to a string for network transmission.
+         * Format: PATH:sx:sy:dx:dy
+         */
+        public String serialize() {
+            return String.format("PATH:%.4f:%.4f:%.4f:%.4f", sourceX, sourceY, destX, destY);
+        }
+
+        /**
+         * Deserializes a path message from a string.
+         */
+        public static PathMessage deserialize(String data) {
+            try {
+                String[] parts = data.split(":");
+                if (parts.length != 5 || !parts[0].equals("PATH")) {
+                    return null;
+                }
+                double sx = Double.parseDouble(parts[1]);
+                double sy = Double.parseDouble(parts[2]);
+                double dx = Double.parseDouble(parts[3]);
+                double dy = Double.parseDouble(parts[4]);
+                return new PathMessage(sx, sy, dx, dy);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+    }
+
+    // ==================== Edge Message Class ====================
+
+    /**
+     * Represents an edge message for edge synchronization.
+     */
+    public static class EdgeMessage {
+        private final double x1, y1, x2, y2;
+
+        public EdgeMessage(double x1, double y1, double x2, double y2) {
+            this.x1 = x1; this.y1 = y1; this.x2 = x2; this.y2 = y2;
+        }
+
+        public double getX1() { return x1; }
+        public double getY1() { return y1; }
+        public double getX2() { return x2; }
+        public double getY2() { return y2; }
+
+        public String serialize() {
+            return String.format("EDGE:%.4f:%.4f:%.4f:%.4f", x1, y1, x2, y2);
+        }
+
+        public static EdgeMessage deserialize(String data) {
+            try {
+                String[] parts = data.split(":");
+                if (parts.length != 5 || !parts[0].equals("EDGE")) return null;
+                return new EdgeMessage(
+                    Double.parseDouble(parts[1]), Double.parseDouble(parts[2]),
+                    Double.parseDouble(parts[3]), Double.parseDouble(parts[4])
+                );
+            } catch (Exception e) { return null; }
+        }
+    }
+
     // ==================== Constructor ====================
 
     /**
@@ -199,6 +291,30 @@ public class NetworkManager {
      */
     public void setOnPointReceived(Consumer<PointMessage> callback) {
         this.onPointReceived = callback;
+    }
+
+    /**
+     * Sets the callback for received path messages.
+     * The callback will be invoked on the EDT via SwingUtilities.invokeLater().
+     *
+     * @param callback Function to process received paths
+     */
+    public void setOnPathReceived(Consumer<PathMessage> callback) {
+        this.onPathReceived = callback;
+    }
+
+    /**
+     * Sets the callback for received edge messages.
+     */
+    public void setOnEdgeReceived(Consumer<EdgeMessage> callback) {
+        this.onEdgeReceived = callback;
+    }
+
+    /**
+     * Sets the callback for path removal messages.
+     */
+    public void setOnPathRemoved(Consumer<Integer> callback) {
+        this.onPathRemoved = callback;
     }
 
     /**
@@ -401,6 +517,43 @@ public class NetworkManager {
                         continue;
                     }
 
+                    // Check if this is a path message
+                    if (receivedLine.startsWith("PATH:")) {
+                        PathMessage pathMsg = PathMessage.deserialize(receivedLine);
+                        if (pathMsg != null && onPathReceived != null) {
+                            System.out.println("[NetworkManager] Received path");
+                            javax.swing.SwingUtilities.invokeLater(() -> {
+                                onPathReceived.accept(pathMsg);
+                            });
+                        }
+                        continue;
+                    }
+
+                    // Check if this is an edge message
+                    if (receivedLine.startsWith("EDGE:")) {
+                        EdgeMessage edgeMsg = EdgeMessage.deserialize(receivedLine);
+                        if (edgeMsg != null && onEdgeReceived != null) {
+                            System.out.println("[NetworkManager] Received edge");
+                            javax.swing.SwingUtilities.invokeLater(() -> {
+                                onEdgeReceived.accept(edgeMsg);
+                            });
+                        }
+                        continue;
+                    }
+
+                    // Check if this is a path remove message
+                    if (receivedLine.startsWith("PATHREMOVE:")) {
+                        try {
+                            int pathIndex = Integer.parseInt(receivedLine.substring(11));
+                            if (onPathRemoved != null) {
+                                javax.swing.SwingUtilities.invokeLater(() -> {
+                                    onPathRemoved.accept(pathIndex);
+                                });
+                            }
+                        } catch (NumberFormatException e) { }
+                        continue;
+                    }
+
                     // Handle text message - unescape newlines
                     String unescapedText = receivedLine.replace("\\n", "\n").replace("\\\\", "\\");
 
@@ -507,6 +660,82 @@ public class NetworkManager {
             System.err.println("[NetworkManager] Send point error: " + e.getMessage());
             notifyStatusChanged(ConnectionStatus.ERROR);
             cleanup();
+            return false;
+        }
+    }
+
+    /**
+     * Sends a path message to the connected peer.
+     * This method is thread-safe and can be called from any thread (typically EDT).
+     *
+     * @param sourceX Source point X coordinate
+     * @param sourceY Source point Y coordinate
+     * @param destX Destination point X coordinate
+     * @param destY Destination point Y coordinate
+     * @return true if the send was successful, false otherwise
+     */
+    public synchronized boolean sendPath(double sourceX, double sourceY, double destX, double destY) {
+        if (!connected.get() || writer == null) {
+            System.err.println("[NetworkManager] Cannot send path - not connected");
+            return false;
+        }
+
+        try {
+            PathMessage msg = new PathMessage(sourceX, sourceY, destX, destY);
+            writer.write(msg.serialize());
+            writer.newLine();
+            writer.flush();
+
+            System.out.println("[NetworkManager] Sent path");
+            return true;
+
+        } catch (IOException e) {
+            System.err.println("[NetworkManager] Send path error: " + e.getMessage());
+            notifyStatusChanged(ConnectionStatus.ERROR);
+            cleanup();
+            return false;
+        }
+    }
+
+    /**
+     * Sends an edge message to the connected peer.
+     */
+    public synchronized boolean sendEdge(double x1, double y1, double x2, double y2) {
+        if (!connected.get() || writer == null) {
+            System.err.println("[NetworkManager] Cannot send edge - not connected");
+            return false;
+        }
+
+        try {
+            EdgeMessage msg = new EdgeMessage(x1, y1, x2, y2);
+            writer.write(msg.serialize());
+            writer.newLine();
+            writer.flush();
+            System.out.println("[NetworkManager] Sent edge");
+            return true;
+        } catch (IOException e) {
+            System.err.println("[NetworkManager] Send edge error: " + e.getMessage());
+            notifyStatusChanged(ConnectionStatus.ERROR);
+            cleanup();
+            return false;
+        }
+    }
+
+    /**
+     * Sends a path removal message to the connected peer.
+     */
+    public synchronized boolean sendPathRemove(int pathIndex) {
+        if (!connected.get() || writer == null) {
+            return false;
+        }
+        try {
+            writer.write("PATHREMOVE:" + pathIndex);
+            writer.newLine();
+            writer.flush();
+            System.out.println("[NetworkManager] Sent path remove");
+            return true;
+        } catch (IOException e) {
+            System.err.println("[NetworkManager] Send path remove error: " + e.getMessage());
             return false;
         }
     }

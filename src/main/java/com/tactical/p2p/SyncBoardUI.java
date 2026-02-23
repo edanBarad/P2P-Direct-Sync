@@ -3,39 +3,31 @@ package com.tactical.p2p;
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
-import javax.swing.text.Document;
+import javax.swing.text.*;
 import java.awt.*;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
+import java.awt.event.*;
 
 /**
- * SyncBoardUI - Main UI Component for the P2P Shared Board
- *
- * Features two views accessible via tabs:
- * - Text Board: Synchronized text areas between peers
- * - Map View: Shared map with clickable points
- *
- * Design Patterns Used:
- * - Observer: DocumentListener for text changes, StateChangeListener for model updates
- * - MVC: This is the View/Controller, StateModel is the Model
- * - Dependency Injection: StateModel and NetworkManager are injected via constructor
+ * SyncBoardUI - Main UI with Messenger-style chat and Map.
  */
 public class SyncBoardUI {
 
-    // ==================== UI Constants ====================
-
     private static final String TITLE_PREFIX = "P2P Shared Board - ";
-    private static final Font TEXT_FONT = new Font("Monospaced", Font.PLAIN, 14);
     private static final int STATUS_BAR_HEIGHT = 30;
-
-    // ==================== UI Components ====================
 
     private JFrame frame;
     private JTabbedPane tabbedPane;
 
-    // Text board components
-    private JTextArea topTextArea;
-    private JTextArea bottomTextArea;
+    // Chat components
+    private JTextPane chatPane;
+    private StyledDocument chatDoc;
+    private JTextField messageInput;
+    private JScrollPane chatScrollPane;
+
+    // Style attributes for chat
+    private Style hostStyle;
+    private Style clientStyle;
+    private Style systemStyle;
 
     // Map components
     private MapScreen mapScreen;
@@ -44,14 +36,11 @@ public class SyncBoardUI {
     private JLabel statusLabel;
     private JLabel roleLabel;
 
-    // ==================== Dependencies ====================
-
+    // Dependencies
     private final StateModel stateModel;
     private final NetworkManager networkManager;
-    private boolean isUpdatingFromNetwork = false;
     private boolean isHost;
-
-    // ==================== Constructor ====================
+    private boolean isUpdatingFromNetwork = false;
 
     public SyncBoardUI(StateModel stateModel, NetworkManager networkManager) {
         if (stateModel == null || networkManager == null) {
@@ -61,8 +50,6 @@ public class SyncBoardUI {
         this.networkManager = networkManager;
     }
 
-    // ==================== UI Initialization ====================
-
     public void initialize(String role) {
         if (!SwingUtilities.isEventDispatchThread()) {
             SwingUtilities.invokeLater(() -> initialize(role));
@@ -71,124 +58,133 @@ public class SyncBoardUI {
 
         this.isHost = "HOST".equals(role);
 
-        // Create main frame
         frame = new JFrame(TITLE_PREFIX + role);
         frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
-        frame.setLayout(new BorderLayout());
-
         frame.addWindowListener(new WindowAdapter() {
             @Override
-            public void windowClosing(WindowEvent e) {
-                shutdown();
-            }
+            public void windowClosing(WindowEvent e) { shutdown(); }
         });
 
-        // Create tabbed pane
         tabbedPane = new JTabbedPane();
 
-        // Create Text Board tab
-        JPanel textBoardPanel = createTextBoardPanel();
-        tabbedPane.addTab("Text Board", textBoardPanel);
+        // Create Chat tab
+        JPanel chatPanel = createChatPanel();
+        tabbedPane.addTab("Chat", chatPanel);
 
         // Create Map tab
         JPanel mapPanelWrapper = createMapPanel();
         tabbedPane.addTab("Map", mapPanelWrapper);
 
         frame.add(tabbedPane, BorderLayout.CENTER);
-
-        // Create status bar
         createStatusBar(role);
-
-        // Set up callbacks
         setupNetworkCallbacks();
         setupStateListener();
 
-        // Configure and show frame
         frame.setSize(700, 550);
         frame.setLocationRelativeTo(null);
         frame.setMinimumSize(new Dimension(500, 400));
         frame.setVisible(true);
 
-        // Focus on text area
-        bottomTextArea.requestFocusInWindow();
+        messageInput.requestFocusInWindow();
+
+        // Add welcome message
+        addSystemMessage("Connected as " + role);
     }
 
-    // ==================== Text Board Panel ====================
+    // ==================== Chat Panel ====================
 
-    private JPanel createTextBoardPanel() {
-        JPanel panel = new JPanel(new GridLayout(2, 1, 5, 5));
+    private JPanel createChatPanel() {
+        JPanel panel = new JPanel(new BorderLayout(5, 5));
         panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-        // Top Panel - Remote Text (Read-Only)
-        topTextArea = createTextArea(false);
-        topTextArea.setBackground(new Color(240, 240, 240));
-        JScrollPane topScrollPane = createScrollPane(topTextArea, "Remote Peer (Read-Only)");
+        // Chat display area
+        chatPane = new JTextPane();
+        chatPane.setEditable(false);
+        chatPane.setFont(new Font("Arial", Font.PLAIN, 14));
+        chatPane.setMargin(new Insets(10, 10, 10, 10));
 
-        // Bottom Panel - Local Text (Editable)
-        bottomTextArea = createTextArea(true);
-        bottomTextArea.setBackground(Color.WHITE);
-        JScrollPane bottomScrollPane = createScrollPane(bottomTextArea, "Local Input (Type here)");
+        // Initialize styles
+        chatDoc = chatPane.getStyledDocument();
+        initStyles();
 
-        // Add document listener for real-time sync
-        addDocumentListener();
+        chatScrollPane = new JScrollPane(chatPane);
+        chatScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
+        chatScrollPane.setBorder(BorderFactory.createTitledBorder("Messages"));
 
-        panel.add(topScrollPane);
-        panel.add(bottomScrollPane);
+        // Message input
+        JPanel inputPanel = new JPanel(new BorderLayout(5, 0));
+        messageInput = new JTextField();
+        messageInput.setFont(new Font("Arial", Font.PLAIN, 14));
+        messageInput.addActionListener(e -> sendMessage());
+
+        JButton sendBtn = new JButton("Send");
+        sendBtn.addActionListener(e -> sendMessage());
+
+        inputPanel.add(messageInput, BorderLayout.CENTER);
+        inputPanel.add(sendBtn, BorderLayout.EAST);
+
+        panel.add(chatScrollPane, BorderLayout.CENTER);
+        panel.add(inputPanel, BorderLayout.SOUTH);
 
         return panel;
     }
 
-    private JTextArea createTextArea(boolean editable) {
-        JTextArea textArea = new JTextArea();
-        textArea.setFont(TEXT_FONT);
-        textArea.setEditable(editable);
-        textArea.setLineWrap(true);
-        textArea.setWrapStyleWord(true);
-        textArea.setMargin(new Insets(5, 5, 5, 5));
-        return textArea;
+    private void initStyles() {
+        hostStyle = chatDoc.addStyle("HostStyle", null);
+        StyleConstants.setForeground(hostStyle, new Color(30, 144, 255));
+        StyleConstants.setBold(hostStyle, true);
+
+        clientStyle = chatDoc.addStyle("ClientStyle", null);
+        StyleConstants.setForeground(clientStyle, new Color(220, 20, 60));
+        StyleConstants.setBold(clientStyle, true);
+
+        systemStyle = chatDoc.addStyle("SystemStyle", null);
+        StyleConstants.setForeground(systemStyle, new Color(128, 128, 128));
+        StyleConstants.setItalic(systemStyle, true);
+
+        Style regularStyle = chatDoc.addStyle("RegularStyle", null);
+        StyleConstants.setForeground(regularStyle, Color.BLACK);
     }
 
-    private JScrollPane createScrollPane(JTextArea textArea, String title) {
-        JScrollPane scrollPane = new JScrollPane(textArea);
-        scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
-        scrollPane.setBorder(BorderFactory.createTitledBorder(
-            BorderFactory.createEtchedBorder(),
-            title
-        ));
-        return scrollPane;
+    private void sendMessage() {
+        String text = messageInput.getText().trim();
+        if (text.isEmpty()) return;
+
+        String sender = isHost ? "Host" : "Client";
+        addMessage(sender, text, isHost);
+
+        messageInput.setText("");
+
+        // Send to network
+        if (networkManager.isConnected()) {
+            networkManager.sendText("MSG:" + sender + ":" + text);
+        }
     }
 
-    private void addDocumentListener() {
-        Document doc = bottomTextArea.getDocument();
-        doc.addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                onLocalTextChanged();
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                onLocalTextChanged();
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                // Ignore attribute changes
+    public void addMessage(String sender, String text, boolean fromHost) {
+        SwingUtilities.invokeLater(() -> {
+            try {
+                // Add sender name
+                chatDoc.insertString(chatDoc.getLength(), sender + ": ", fromHost ? hostStyle : clientStyle);
+                // Add message text
+                chatDoc.insertString(chatDoc.getLength(), text + "\n", chatDoc.getStyle("RegularStyle"));
+                // Scroll to bottom
+                chatPane.setCaretPosition(chatDoc.getLength());
+            } catch (BadLocationException e) {
+                e.printStackTrace();
             }
         });
     }
 
-    private void onLocalTextChanged() {
-        if (isUpdatingFromNetwork) {
-            return;
-        }
-
-        String text = bottomTextArea.getText();
-        stateModel.setLocalText(text);
-
-        if (networkManager.isConnected()) {
-            networkManager.sendText(text);
-        }
+    public void addSystemMessage(String text) {
+        SwingUtilities.invokeLater(() -> {
+            try {
+                chatDoc.insertString(chatDoc.getLength(), "[System] " + text + "\n", systemStyle);
+                chatPane.setCaretPosition(chatDoc.getLength());
+            } catch (BadLocationException e) {
+                e.printStackTrace();
+            }
+        });
     }
 
     // ==================== Map Panel ====================
@@ -196,19 +192,32 @@ public class SyncBoardUI {
     private JPanel createMapPanel() {
         JPanel wrapper = new JPanel(new BorderLayout());
 
-        // Create map screen
         mapScreen = new MapScreen();
         mapScreen.setIsHost(isHost);
 
-        // Add instructions label
-        JLabel instructions = new JLabel(" Left-click to add point (auto-connects to nearest) | Right-click to delete");
+        // Top panel with buttons
+        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JButton findPathBtn = new JButton("Find Path");
+        JButton removePathBtn = new JButton("Remove Path");
+        JButton clearAllBtn = new JButton("Clear All Paths");
+
+        findPathBtn.addActionListener(e -> mapScreen.startPathSelection());
+        removePathBtn.addActionListener(e -> mapScreen.startPathRemoval());
+        clearAllBtn.addActionListener(e -> mapScreen.clearAllPaths());
+
+        topPanel.add(findPathBtn);
+        topPanel.add(removePathBtn);
+        topPanel.add(clearAllBtn);
+
+        JLabel instructions = new JLabel("Click: add point | Click own point → another: add edge | Right-click: delete");
         instructions.setForeground(Color.DARK_GRAY);
-        instructions.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
+        topPanel.add(Box.createHorizontalStrut(10));
+        topPanel.add(instructions);
 
+        wrapper.add(topPanel, BorderLayout.NORTH);
         wrapper.add(mapScreen, BorderLayout.CENTER);
-        wrapper.add(instructions, BorderLayout.SOUTH);
 
-        // Set up point callbacks
+        // Point callbacks
         mapScreen.setOnPointAdded(point -> {
             if (networkManager.isConnected()) {
                 networkManager.sendPoint(point, NetworkManager.PointMessage.Action.ADD, isHost);
@@ -217,8 +226,40 @@ public class SyncBoardUI {
 
         mapScreen.setOnPointRemoved(point -> {
             if (networkManager.isConnected()) {
-                // For removal, we don't need to track ownership - both sides can delete any point
                 networkManager.sendPoint(point, NetworkManager.PointMessage.Action.REMOVE, isHost);
+            }
+        });
+
+        // Edge callback
+        mapScreen.setOnEdgeAdded(edgeInfo -> {
+            if (networkManager.isConnected()) {
+                networkManager.sendEdge(edgeInfo.x1, edgeInfo.y1, edgeInfo.x2, edgeInfo.y2);
+            }
+        });
+
+        // Path found callback
+        mapScreen.setOnPathFound(pathInfo -> {
+            if (networkManager.isConnected()) {
+                networkManager.sendPath(pathInfo.sourceX, pathInfo.sourceY, pathInfo.destX, pathInfo.destY);
+                String sender = isHost ? "Host" : "Client";
+                addMessage(sender, "Found a path with length " + (int) pathInfo.length, isHost);
+                networkManager.sendText("MSG:" + sender + ":Found a path with length " + (int) pathInfo.length);
+            }
+        });
+
+        // Path removed callback
+        mapScreen.setOnPathRemoved(pathIndex -> {
+            if (networkManager.isConnected()) {
+                networkManager.sendPathRemove(pathIndex);
+            }
+        });
+
+        // Message callback (for path removal notification)
+        mapScreen.setOnMessage(msg -> {
+            String sender = isHost ? "Host" : "Client";
+            addMessage(sender, msg, isHost);
+            if (networkManager.isConnected()) {
+                networkManager.sendText("MSG:" + sender + ":" + msg);
             }
         });
 
@@ -248,12 +289,18 @@ public class SyncBoardUI {
     // ==================== Network Callbacks ====================
 
     private void setupNetworkCallbacks() {
-        // Handle received text
         networkManager.setOnTextReceived(text -> {
-            updateRemoteText(text);
+            // Parse message format: MSG:sender:text
+            if (text.startsWith("MSG:")) {
+                String[] parts = text.split(":", 3);
+                if (parts.length >= 3) {
+                    String sender = parts[1];
+                    String msgText = parts[2];
+                    addMessage(sender, msgText, sender.equals("Host"));
+                }
+            }
         });
 
-        // Handle received points
         networkManager.setOnPointReceived(pointMsg -> {
             if (mapScreen != null) {
                 if (pointMsg.getAction() == NetworkManager.PointMessage.Action.ADD) {
@@ -264,45 +311,39 @@ public class SyncBoardUI {
             }
         });
 
-        // Handle status changes
-        networkManager.setOnStatusChanged(status -> {
-            updateConnectionStatus(status);
+        networkManager.setOnPathReceived(pathMsg -> {
+            if (mapScreen != null) {
+                mapScreen.setRemotePath(pathMsg.getSourceX(), pathMsg.getSourceY(),
+                                        pathMsg.getDestX(), pathMsg.getDestY(), 0);
+            }
         });
-    }
 
-    // ==================== State Listener ====================
+        networkManager.setOnEdgeReceived(edgeMsg -> {
+            if (mapScreen != null) {
+                mapScreen.addRemoteEdge(edgeMsg.getX1(), edgeMsg.getY1(),
+                                        edgeMsg.getX2(), edgeMsg.getY2());
+            }
+        });
+
+        networkManager.setOnPathRemoved(pathIndex -> {
+            if (mapScreen != null) {
+                mapScreen.removeRemotePath(pathIndex);
+            }
+        });
+
+        networkManager.setOnStatusChanged(status -> updateConnectionStatus(status));
+    }
 
     private void setupStateListener() {
-        stateModel.addListener(model -> {
-            SwingUtilities.invokeLater(() -> {
-                if (model.isConnected()) {
-                    statusLabel.setText("Status: Connected");
-                    statusLabel.setForeground(new Color(0, 128, 0));
-                } else {
-                    statusLabel.setText("Status: Disconnected");
-                    statusLabel.setForeground(Color.GRAY);
-                }
-            });
-        });
-    }
-
-    // ==================== UI Update Methods ====================
-
-    private void updateRemoteText(String text) {
-        isUpdatingFromNetwork = true;
-
-        try {
-            int caretPos = topTextArea.getCaretPosition();
-            topTextArea.setText(text);
-
-            if (caretPos <= text.length()) {
-                topTextArea.setCaretPosition(caretPos);
+        stateModel.addListener(model -> SwingUtilities.invokeLater(() -> {
+            if (model.isConnected()) {
+                statusLabel.setText("Status: Connected");
+                statusLabel.setForeground(new Color(0, 128, 0));
+            } else {
+                statusLabel.setText("Status: Disconnected");
+                statusLabel.setForeground(Color.GRAY);
             }
-
-            stateModel.setRemoteText(text);
-        } finally {
-            isUpdatingFromNetwork = false;
-        }
+        }));
     }
 
     private void updateConnectionStatus(NetworkManager.ConnectionStatus status) {
@@ -330,17 +371,11 @@ public class SyncBoardUI {
         }
     }
 
-    // ==================== Shutdown ====================
-
     public void shutdown() {
         System.out.println("[SyncBoardUI] Shutting down...");
         networkManager.shutdown();
-        if (frame != null) {
-            frame.dispose();
-        }
+        if (frame != null) frame.dispose();
     }
 
-    public JFrame getFrame() {
-        return frame;
-    }
+    public JFrame getFrame() { return frame; }
 }
