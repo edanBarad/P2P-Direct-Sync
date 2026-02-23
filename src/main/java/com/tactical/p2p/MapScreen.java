@@ -52,6 +52,32 @@ public class MapScreen extends JPanel {
     private Consumer<PathInfo> onPathFound;
     private Consumer<Integer> onPathRemoved; // path index
     private Consumer<String> onMessage; // for chat messages
+    private Consumer<ZoneInfo> onZoneTriggered;
+    private Consumer<PatrolInfo> onPatrolStarted;
+    private PatrolProgressCallback onPatrolProgress;
+    private Consumer<PatrolInfo> onPatrolCompleted;
+
+    private AuditLogger auditLogger;
+
+    // Zone state
+    private final List<Zone> zones = new ArrayList<>();
+    private boolean drawingZone = false;
+    private Point zoneStart = null;
+    private boolean drawingCircleZone = false;
+
+    // Patrol state
+    private final List<PatrolRoute> patrolRoutes = new ArrayList<>();
+    private int currentPatrolRoute = -1;
+    private int patrolCheckpoint = 0;
+    private javax.swing.Timer patrolTimer;
+    private long patrolStartTime;
+    private boolean creatingPatrol = false;
+    private final List<Point> patrolPoints = new ArrayList<>();
+
+    // BiConsumer alternative for patrol progress
+    public interface PatrolProgressCallback {
+        void accept(int index, int total);
+    }
 
     public static class EdgeInfo {
         public final double x1, y1, x2, y2;
@@ -87,6 +113,76 @@ public class MapScreen extends JPanel {
             this.isHostPath = isHostPath;
             this.source = source;
             this.dest = dest;
+        }
+    }
+
+    // Zone info for callbacks
+    public static class ZoneInfo {
+        public final String name;
+        public final double x, y, width, height;
+        public final boolean isCircle;
+        public ZoneInfo(String name, double x, double y, double w, double h, boolean isCircle) {
+            this.name = name;
+            this.x = x; this.y = y;
+            this.width = w; this.height = h;
+            this.isCircle = isCircle;
+        }
+    }
+
+    // Patrol info for callbacks
+    public static class PatrolInfo {
+        public final String name;
+        public final int checkpoints;
+        public final double duration;
+        public PatrolInfo(String name, int checkpoints, double duration) {
+            this.name = name;
+            this.checkpoints = checkpoints;
+            this.duration = duration;
+        }
+        @Override
+        public String toString() {
+            return name + " (" + checkpoints + " checkpoints, " + (int)duration + "s)";
+        }
+    }
+
+    // Zone representation
+    private static class Zone {
+        final double x, y, width, height;
+        final boolean isCircle;
+        final String name;
+        final Color color;
+
+        Zone(double x, double y, double w, double h, boolean isCircle, String name) {
+            this.x = x; this.y = y;
+            this.width = w; this.height = h;
+            this.isCircle = isCircle;
+            this.name = name;
+            this.color = isCircle ? new Color(255, 100, 100, 80) : new Color(100, 100, 255, 80);
+        }
+
+        boolean contains(Point p) {
+            if (isCircle) {
+                double cx = x + width / 2, cy = y + height / 2;
+                double radius = Math.min(width, height) / 2;
+                double dx = p.getX() - cx, dy = p.getY() - cy;
+                return Math.sqrt(dx * dx + dy * dy) <= radius;
+            } else {
+                return p.getX() >= x && p.getX() <= x + width &&
+                       p.getY() >= y && p.getY() <= y + height;
+            }
+        }
+    }
+
+    // Patrol route representation
+    private static class PatrolRoute {
+        final List<Point> checkpoints;
+        final String name;
+        final boolean isHostPatrol;
+
+        PatrolRoute(List<Point> checkpoints, String name, boolean isHostPatrol) {
+            this.checkpoints = new ArrayList<>(checkpoints);
+            this.name = name;
+            this.isHostPatrol = isHostPatrol;
         }
     }
 
@@ -177,6 +273,18 @@ public class MapScreen extends JPanel {
     // ==================== Click Handling ====================
 
     private void handleLeftClick(int x, int y) {
+        // Zone drawing mode
+        if (drawingZone) {
+            handleZoneClick(x, y);
+            return;
+        }
+
+        // Patrol creation mode
+        if (creatingPatrol) {
+            handlePatrolClick(x, y);
+            return;
+        }
+
         Point clickedPoint = null;
         Boolean clickedOwner = null;
 
@@ -575,6 +683,188 @@ public class MapScreen extends JPanel {
     public void setOnPathFound(Consumer<PathInfo> c) { onPathFound = c; }
     public void setOnPathRemoved(Consumer<Integer> c) { onPathRemoved = c; }
     public void setOnMessage(Consumer<String> c) { onMessage = c; }
+    public void setOnZoneTriggered(Consumer<ZoneInfo> c) { onZoneTriggered = c; }
+    public void setOnPatrolStarted(Consumer<PatrolInfo> c) { onPatrolStarted = c; }
+    public void setOnPatrolProgress(PatrolProgressCallback c) { onPatrolProgress = c; }
+    public void setOnPatrolCompleted(Consumer<PatrolInfo> c) { onPatrolCompleted = c; }
+    public void setAuditLogger(AuditLogger logger) { this.auditLogger = logger; }
+
+    // ==================== Zone Operations ====================
+
+    public void startZoneDrawing() {
+        drawingZone = true;
+        drawingCircleZone = false;
+        zoneStart = null;
+        creatingPatrol = false;
+        pathState = PathSelectionState.NONE;
+        repaint();
+    }
+
+    public void startCircleZoneDrawing() {
+        drawingZone = true;
+        drawingCircleZone = true;
+        zoneStart = null;
+        creatingPatrol = false;
+        pathState = PathSelectionState.NONE;
+        repaint();
+    }
+
+    public void clearZones() {
+        zones.clear();
+        drawingZone = false;
+        zoneStart = null;
+        repaint();
+        if (auditLogger != null) {
+            auditLogger.log(AuditLogger.EventType.ZONE_REMOVED, "All zones cleared");
+        }
+    }
+
+    private void handleZoneClick(int x, int y) {
+        Point ratioPoint = toRatio(x, y);
+
+        if (zoneStart == null) {
+            zoneStart = ratioPoint;
+        } else {
+            double x1 = Math.min(zoneStart.getX(), ratioPoint.getX());
+            double y1 = Math.min(zoneStart.getY(), ratioPoint.getY());
+            double w = Math.abs(ratioPoint.getX() - zoneStart.getX());
+            double h = Math.abs(ratioPoint.getY() - zoneStart.getY());
+
+            if (w > 0.01 && h > 0.01) {
+                String name = "Zone " + (zones.size() + 1);
+                zones.add(new Zone(x1, y1, w, h, drawingCircleZone, name));
+
+                if (auditLogger != null) {
+                    auditLogger.log(AuditLogger.EventType.ZONE_CREATED, "Zone created: " + name);
+                }
+            }
+
+            zoneStart = null;
+            drawingZone = false;
+            drawingCircleZone = false;
+        }
+        repaint();
+    }
+
+    private void checkZonesForPoint(Point p) {
+        for (Zone zone : zones) {
+            if (zone.contains(p)) {
+                if (onZoneTriggered != null) {
+                    onZoneTriggered.accept(new ZoneInfo(zone.name, zone.x, zone.y, zone.width, zone.height, zone.isCircle));
+                }
+                if (auditLogger != null) {
+                    auditLogger.log(AuditLogger.EventType.ZONE_TRIGGERED, "Zone triggered: " + zone.name);
+                }
+            }
+        }
+    }
+
+    // ==================== Patrol Operations ====================
+
+    public void startPatrolCreation() {
+        creatingPatrol = true;
+        patrolPoints.clear();
+        drawingZone = false;
+        pathState = PathSelectionState.NONE;
+        repaint();
+    }
+
+    public void startPatrol() {
+        if (patrolRoutes.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "No patrol routes! Create one first.", "No Routes", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        if (patrolTimer != null && patrolTimer.isRunning()) {
+            return; // Already patrolling
+        }
+
+        currentPatrolRoute = patrolRoutes.size() - 1; // Use latest route
+        patrolCheckpoint = 0;
+        patrolStartTime = System.currentTimeMillis();
+
+        PatrolRoute route = patrolRoutes.get(currentPatrolRoute);
+        if (onPatrolStarted != null) {
+            onPatrolStarted.accept(new PatrolInfo(route.name, route.checkpoints.size(), 0));
+        }
+        if (auditLogger != null) {
+            auditLogger.log(AuditLogger.EventType.PATROL_STARTED, "Patrol started: " + route.name);
+        }
+
+        // Simulate patrol progress (every 3 seconds advance checkpoint)
+        patrolTimer = new javax.swing.Timer(3000, e -> {
+            PatrolRoute r = patrolRoutes.get(currentPatrolRoute);
+            patrolCheckpoint++;
+
+            if (patrolCheckpoint >= r.checkpoints.size()) {
+                // Patrol complete
+                double duration = (System.currentTimeMillis() - patrolStartTime) / 1000.0;
+                if (onPatrolCompleted != null) {
+                    onPatrolCompleted.accept(new PatrolInfo(r.name, r.checkpoints.size(), duration));
+                }
+                if (auditLogger != null) {
+                    auditLogger.log(AuditLogger.EventType.PATROL_COMPLETED, "Patrol completed: " + r.name);
+                }
+                patrolTimer.stop();
+                patrolTimer = null;
+                patrolCheckpoint = 0;
+            } else {
+                if (onPatrolProgress != null) {
+                    onPatrolProgress.accept(patrolCheckpoint + 1, r.checkpoints.size());
+                }
+                if (auditLogger != null) {
+                    auditLogger.log(AuditLogger.EventType.PATROL_PROGRESS, "Patrol checkpoint " + (patrolCheckpoint + 1));
+                }
+            }
+            repaint();
+        });
+        patrolTimer.start();
+        repaint();
+    }
+
+    public void endPatrol() {
+        if (patrolTimer != null) {
+            patrolTimer.stop();
+            patrolTimer = null;
+        }
+        patrolCheckpoint = 0;
+        repaint();
+
+        if (auditLogger != null) {
+            auditLogger.log(AuditLogger.EventType.PATROL_COMPLETED, "Patrol ended manually");
+        }
+    }
+
+    private void handlePatrolClick(int x, int y) {
+        // Find clicked point
+        Point clickedPoint = null;
+        for (Point p : points) {
+            if (isPointHit(p, x, y)) {
+                clickedPoint = p;
+                break;
+            }
+        }
+
+        if (clickedPoint != null) {
+            patrolPoints.add(clickedPoint);
+            repaint();
+
+            // Check if we have enough points for a patrol route
+            if (patrolPoints.size() >= 3) {
+                int result = JOptionPane.showConfirmDialog(this,
+                    "Create patrol route with " + patrolPoints.size() + " checkpoints?",
+                    "Create Patrol", JOptionPane.YES_NO_OPTION);
+                if (result == JOptionPane.YES_OPTION) {
+                    String name = "Patrol " + (patrolRoutes.size() + 1);
+                    patrolRoutes.add(new PatrolRoute(patrolPoints, name, isHost));
+                    if (auditLogger != null) {
+                        auditLogger.log(AuditLogger.EventType.PATROL_STARTED, "Patrol route created: " + name);
+                    }
+                }
+                patrolPoints.clear();
+                creatingPatrol = false;
+            }
+        }
+    }
 
     // ==================== Rendering ====================
 
@@ -583,6 +873,9 @@ public class MapScreen extends JPanel {
         super.paintComponent(g);
         Graphics2D g2d = (Graphics2D) g;
         g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+        // Draw zones first (background)
+        drawZones(g2d);
 
         // Normal lines
         g2d.setColor(LINE_COLOR);
@@ -609,10 +902,16 @@ public class MapScreen extends JPanel {
             }
         }
 
+        // Draw patrol routes
+        drawPatrolRoutes(g2d);
+
         // Points
         for (int i = 0; i < points.size(); i++) {
             drawPoint(g2d, points.get(i), pointOwnership.get(i));
         }
+
+        // Draw patrol creation points
+        drawPatrolCreationPoints(g2d);
 
         drawLegend(g2d);
 
@@ -623,10 +922,118 @@ public class MapScreen extends JPanel {
             g2d.drawString(stateText, getWidth() / 2 - 100, 25);
         }
 
+        // Zone drawing indicator
+        if (drawingZone) {
+            g2d.setColor(new Color(148, 0, 211));
+            g2d.setFont(new Font("Arial", Font.BOLD, 14));
+            String msg = drawingCircleZone ? "Click two corners for circle zone" : "Click two corners for rectangle zone";
+            g2d.drawString(msg, getWidth() / 2 - 100, 25);
+
+            if (zoneStart != null) {
+                Point px = toPixels(zoneStart.getX(), zoneStart.getY());
+                g2d.setColor(new Color(100, 100, 255, 100));
+                g2d.fillOval((int)px.getX() - 5, (int)px.getY() - 5, 10, 10);
+            }
+        }
+
+        // Patrol creation indicator
+        if (creatingPatrol) {
+            g2d.setColor(new Color(0, 128, 0));
+            g2d.setFont(new Font("Arial", Font.BOLD, 14));
+            g2d.drawString("Click points for patrol route (" + patrolPoints.size() + " selected)", getWidth() / 2 - 120, 25);
+        }
+
         if (!paths.isEmpty()) {
             g2d.setColor(Color.DARK_GRAY);
             g2d.setFont(new Font("Arial", Font.PLAIN, 12));
             g2d.drawString("Paths: " + paths.size(), getWidth() - 80, 20);
+        }
+    }
+
+    private void drawZones(Graphics2D g2d) {
+        for (Zone zone : zones) {
+            int x = (int) (zone.x * getWidth());
+            int y = (int) (zone.y * getHeight());
+            int w = (int) (zone.width * getWidth());
+            int h = (int) (zone.height * getHeight());
+
+            g2d.setColor(zone.color);
+            if (zone.isCircle) {
+                g2d.fillOval(x, y, w, h);
+            } else {
+                g2d.fillRect(x, y, w, h);
+            }
+
+            g2d.setColor(zone.isCircle ? Color.RED : Color.BLUE);
+            g2d.setStroke(new BasicStroke(2, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10, new float[]{5}, 0));
+            if (zone.isCircle) {
+                g2d.drawOval(x, y, w, h);
+            } else {
+                g2d.drawRect(x, y, w, h);
+            }
+            g2d.setStroke(new BasicStroke(1));
+
+            // Zone name
+            g2d.setColor(Color.BLACK);
+            g2d.setFont(new Font("Arial", Font.BOLD, 12));
+            g2d.drawString(zone.name, x + 5, y + 15);
+        }
+    }
+
+    private void drawPatrolRoutes(Graphics2D g2d) {
+        for (int i = 0; i < patrolRoutes.size(); i++) {
+            PatrolRoute route = patrolRoutes.get(i);
+            if (route.checkpoints.size() < 2) continue;
+
+            g2d.setColor(route.isHostPatrol ? new Color(0, 128, 0, 150) : new Color(255, 128, 0, 150));
+            g2d.setStroke(new BasicStroke(3, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10, new float[]{10, 5}, 0));
+
+            for (int j = 0; j < route.checkpoints.size() - 1; j++) {
+                Point p1 = route.checkpoints.get(j);
+                Point p2 = route.checkpoints.get(j + 1);
+                drawLine(g2d, new Line(p1, p2), 0);
+            }
+
+            // Draw checkpoint numbers
+            g2d.setColor(Color.BLACK);
+            g2d.setFont(new Font("Arial", Font.BOLD, 10));
+            for (int j = 0; j < route.checkpoints.size(); j++) {
+                Point p = route.checkpoints.get(j);
+                Point px = toPixels(p.getX(), p.getY());
+                boolean isCurrent = (i == currentPatrolRoute && j == patrolCheckpoint);
+                if (isCurrent) {
+                    g2d.setColor(Color.GREEN);
+                    g2d.fillOval((int)px.getX() - 12, (int)px.getY() - 12, 24, 24);
+                }
+                g2d.setColor(isCurrent ? Color.WHITE : Color.BLACK);
+                g2d.drawString(String.valueOf(j + 1), (int)px.getX() - 4, (int)px.getY() + 4);
+            }
+        }
+        g2d.setStroke(new BasicStroke(1));
+    }
+
+    private void drawPatrolCreationPoints(Graphics2D g2d) {
+        if (patrolPoints.isEmpty()) return;
+
+        g2d.setColor(new Color(0, 200, 0));
+        for (int i = 0; i < patrolPoints.size(); i++) {
+            Point p = patrolPoints.get(i);
+            Point px = toPixels(p.getX(), p.getY());
+            g2d.fillOval((int)px.getX() - 10, (int)px.getY() - 10, 20, 20);
+            g2d.setColor(Color.WHITE);
+            g2d.setFont(new Font("Arial", Font.BOLD, 10));
+            g2d.drawString(String.valueOf(i + 1), (int)px.getX() - 4, (int)px.getY() + 4);
+            g2d.setColor(new Color(0, 200, 0));
+        }
+
+        // Draw lines between patrol points
+        if (patrolPoints.size() > 1) {
+            g2d.setColor(new Color(0, 200, 0, 150));
+            g2d.setStroke(new BasicStroke(2, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10, new float[]{5}, 0));
+            for (int i = 0; i < patrolPoints.size() - 1; i++) {
+                drawLine(g2d, new Line(patrolPoints.get(i), patrolPoints.get(i + 1)), 0);
+            }
+            g2d.setStroke(new BasicStroke(1));
         }
     }
 
