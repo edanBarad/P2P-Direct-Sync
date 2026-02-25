@@ -5,6 +5,8 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import javax.swing.*;
+import java.awt.*;
 
 /**
  * NetworkManager - Thread-Safe TCP Socket Wrapper
@@ -93,8 +95,31 @@ public class NetworkManager {
     /** Callback invoked when connection status changes */
     private Consumer<ConnectionStatus> onStatusChanged;
 
+    /** Callback invoked when auth is required (client side) */
+    private Runnable onAuthRequired;
+
+    /** Callback invoked when auth result is received */
+    private Consumer<Boolean> onAuthResult;
+
+    /** Callback invoked when auth attempt is made (host side) */
+    private Consumer<String> onAuthAttempt;
+
+    /** Callback invoked when Dead Man's Switch alert is received */
+    private Consumer<String> onDeadMansSwitch;
+
     /** Reference to the shared state model */
     private final StateModel stateModel;
+
+    /** Authentication manager reference */
+    private AuthManager authManager;
+
+    /** Parent frame for dialogs */
+    private java.awt.Frame parentFrame;
+
+    /** Pending connection for authentication */
+    private Socket pendingSocket;
+    private BufferedWriter pendingWriter;
+    private BufferedReader pendingReader;
 
     // ==================== Connection Status Enum ====================
 
@@ -327,6 +352,48 @@ public class NetworkManager {
         this.onStatusChanged = callback;
     }
 
+    /**
+     * Sets the callback for when authentication is required (client side).
+     */
+    public void setOnAuthRequired(Runnable callback) {
+        this.onAuthRequired = callback;
+    }
+
+    /**
+     * Sets the callback for authentication results.
+     */
+    public void setOnAuthResult(Consumer<Boolean> callback) {
+        this.onAuthResult = callback;
+    }
+
+    /**
+     * Sets the callback for auth attempts (host side).
+     */
+    public void setOnAuthAttempt(Consumer<String> callback) {
+        this.onAuthAttempt = callback;
+    }
+
+    /**
+     * Sets the callback for Dead Man's Switch alerts.
+     */
+    public void setOnDeadMansSwitch(Consumer<String> callback) {
+        this.onDeadMansSwitch = callback;
+    }
+
+    /**
+     * Sets the authentication manager for this connection.
+     */
+    public void setAuthManager(AuthManager authManager) {
+        this.authManager = authManager;
+    }
+
+    /**
+     * Sets the parent frame for dialogs.
+     */
+    public void setParentFrame(java.awt.Frame frame) {
+        this.parentFrame = frame;
+    }
+
     // ==================== Host Mode ====================
 
     /**
@@ -334,7 +401,7 @@ public class NetworkManager {
      * Creates a ServerSocket and waits for a client to connect.
      *
      * IMPORTANT: This method spawns a background thread and returns immediately.
-     * The actual connection is established when a client connects.
+     * The actual connection is established when a client connects and authenticates.
      *
      * @param port The port to listen on
      */
@@ -365,7 +432,21 @@ public class NetworkManager {
                 // Initialize streams
                 initializeStreams();
 
-                // Update state
+                // === AUTHENTICATION PHASE ===
+                // Host waits for client to send PIN, validates it
+                notifyStatusChanged(ConnectionStatus.CONNECTING);
+
+                boolean authSuccess = handleHostAuthentication();
+
+                if (!authSuccess) {
+                    // Authentication failed 3 times - close connection
+                    System.out.println("[NetworkManager] Client blocked due to failed authentication");
+                    cleanup();
+                    notifyStatusChanged(ConnectionStatus.ERROR);
+                    return;
+                }
+
+                // Update state - now fully connected
                 connected.set(true);
                 stateModel.setConnected(true);
                 notifyStatusChanged(ConnectionStatus.CONNECTED);
@@ -388,6 +469,58 @@ public class NetworkManager {
 
         hostThread.setDaemon(true);
         hostThread.start();
+    }
+
+    /**
+     * Handles authentication on the host side.
+     * Waits for client PIN attempts and validates them.
+     * @return true if authentication succeeds
+     */
+    private boolean handleHostAuthentication() throws IOException {
+        String line;
+        while ((line = reader.readLine()) != null) {
+            System.out.println("[NetworkManager] Auth received: " + line);
+
+            // Handle PIN submission from client
+            if (line.startsWith("AUTH_PIN:")) {
+                String attempt = line.substring(9);
+                boolean valid = authManager != null && authManager.validatePin(attempt);
+
+                // Calculate remaining attempts BEFORE this attempt's effect
+                int remainingAfter = authManager != null ? authManager.getRemainingAttempts() : 0;
+
+                // Notify host UI about the attempt (on EDT)
+                if (onAuthAttempt != null) {
+                    final String attemptInfo = attempt + ":" + (valid ? "SUCCESS" : "FAIL") + ":" + remainingAfter;
+                    SwingUtilities.invokeLater(() -> onAuthAttempt.accept(attemptInfo));
+                }
+
+                if (valid) {
+                    // Send success to client
+                    writer.write("AUTH_SUCCESS");
+                    writer.newLine();
+                    writer.flush();
+                    System.out.println("[NetworkManager] Auth SUCCESS - client connected");
+                    return true;
+                } else {
+                    if (remainingAfter <= 0) {
+                        // Client is blocked after 3 failures
+                        writer.write("AUTH_BLOCKED");
+                        writer.newLine();
+                        writer.flush();
+                        System.out.println("[NetworkManager] Auth BLOCKED - client exceeded attempts");
+                        return false;
+                    }
+
+                    // Send failure with remaining attempts
+                    writer.write("AUTH_FAIL:" + remainingAfter);
+                    writer.newLine();
+                    writer.flush();
+                    System.out.println("[NetworkManager] Auth FAIL - " + remainingAfter + " attempts remaining");
+                }
+            }
+        }
+        return false;
     }
 
     // ==================== Client Mode ====================
@@ -420,15 +553,29 @@ public class NetworkManager {
                 // Create socket and connect with timeout
                 socket = new Socket();
                 socket.connect(new InetSocketAddress(host, port), CONNECTION_TIMEOUT_MS);
-                socket.setSoTimeout(0); // No read timeout for normal operation
+                socket.setSoTimeout(30000); // 30s timeout for auth phase
                 socket.setKeepAlive(true);
 
-                System.out.println("[NetworkManager] Connected to host!");
+                System.out.println("[NetworkManager] Connected to host, authenticating...");
 
                 // Initialize streams
                 initializeStreams();
 
-                // Update state
+                // === AUTHENTICATION PHASE ===
+                notifyStatusChanged(ConnectionStatus.CONNECTING);
+
+                boolean authSuccess = handleClientAuthentication();
+
+                if (!authSuccess) {
+                    // Authentication failed or blocked
+                    System.out.println("[NetworkManager] Authentication failed");
+                    cleanup();
+                    notifyStatusChanged(ConnectionStatus.ERROR);
+                    return;
+                }
+
+                // Update state - now fully connected
+                socket.setSoTimeout(0); // No timeout for normal operation
                 connected.set(true);
                 stateModel.setConnected(true);
                 notifyStatusChanged(ConnectionStatus.CONNECTED);
@@ -453,6 +600,155 @@ public class NetworkManager {
 
         clientThread.setDaemon(true);
         clientThread.start();
+    }
+
+    /**
+     * Handles authentication on the client side.
+     * Prompts user for PIN and sends to host for validation.
+     * @return true if authentication succeeds
+     */
+    private boolean handleClientAuthentication() throws IOException {
+        int remainingAttempts = 3;
+
+        while (remainingAttempts > 0) {
+            // Request PIN from UI (blocking)
+            final int finalRemaining = remainingAttempts;
+            final String[] pinHolder = new String[1];
+            final boolean[] cancelled = {false};
+
+            // Use invokeAndWait to block until user responds
+            try {
+                SwingUtilities.invokeAndWait(() -> {
+                    if (onAuthRequired != null) {
+                        // Signal UI to show dialog
+                        pinHolder[0] = requestPinFromUI(finalRemaining);
+                    }
+                });
+            } catch (Exception e) {
+                System.err.println("[NetworkManager] Error requesting PIN: " + e.getMessage());
+                return false;
+            }
+
+            String pin = pinHolder[0];
+            if (pin == null) {
+                System.out.println("[NetworkManager] User cancelled PIN entry");
+                return false;
+            }
+
+            // Send PIN to host
+            writer.write("AUTH_PIN:" + pin);
+            writer.newLine();
+            writer.flush();
+            System.out.println("[NetworkManager] Sent PIN for authentication");
+
+            // Wait for response (blocking read)
+            String response = reader.readLine();
+            System.out.println("[NetworkManager] Auth response: " + response);
+
+            if (response == null) {
+                System.err.println("[NetworkManager] Connection lost during auth");
+                return false;
+            }
+
+            if (response.equals("AUTH_SUCCESS")) {
+                System.out.println("[NetworkManager] Authentication successful!");
+                return true;
+            } else if (response.equals("AUTH_BLOCKED")) {
+                SwingUtilities.invokeLater(() -> {
+                    JOptionPane.showMessageDialog(null,
+                        "Too many failed attempts.\nApplication will now close.",
+                        "Authentication Blocked",
+                        JOptionPane.ERROR_MESSAGE);
+                    System.exit(0);
+                });
+                return false;
+            } else if (response.startsWith("AUTH_FAIL:")) {
+                remainingAttempts = Integer.parseInt(response.substring(10));
+                System.out.println("[NetworkManager] Auth failed, remaining: " + remainingAttempts);
+
+                // Show error message
+                final int remaining = remainingAttempts;
+                try {
+                    SwingUtilities.invokeAndWait(() -> {
+                        JOptionPane.showMessageDialog(null,
+                            "Incorrect PIN! " + remaining + " attempts remaining.",
+                            "Authentication Failed",
+                            JOptionPane.WARNING_MESSAGE);
+                    });
+                } catch (Exception e) {
+                    // Ignore
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Requests PIN from UI - called on EDT.
+     */
+    private String requestPinFromUI(int remainingAttempts) {
+        System.out.println("[NetworkManager] requestPinFromUI called, parentFrame=" + parentFrame);
+
+        JPanel panel = new JPanel(new GridLayout(3, 1, 10, 10));
+        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        JPasswordField pinField = new JPasswordField(10);
+        pinField.requestFocusInWindow();
+
+        JLabel attemptsLabel = new JLabel("Attempts remaining: " + remainingAttempts);
+        attemptsLabel.setFont(new Font("Arial", Font.BOLD, 14));
+        attemptsLabel.setForeground(remainingAttempts < 3 ? Color.RED : new Color(0, 128, 0));
+        attemptsLabel.setHorizontalAlignment(SwingConstants.CENTER);
+
+        panel.add(new JLabel("Enter the 4-digit PIN to connect:"));
+        panel.add(pinField);
+        panel.add(attemptsLabel);
+
+        // Create a custom dialog that always stays on top
+        JDialog dialog = new JDialog(parentFrame, "Authentication Required", true);
+        dialog.setContentPane(panel);
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        dialog.setAlwaysOnTop(true);
+        dialog.pack();
+        dialog.setLocationRelativeTo(parentFrame);
+
+        // Add OK/Cancel buttons
+        JPanel buttonPanel = new JPanel(new FlowLayout());
+        JButton okButton = new JButton("OK");
+        JButton cancelButton = new JButton("Cancel");
+
+        final String[] result = {null};
+        okButton.addActionListener(e -> {
+            result[0] = new String(pinField.getPassword());
+            dialog.dispose();
+        });
+        cancelButton.addActionListener(e -> {
+            dialog.dispose();
+        });
+
+        buttonPanel.add(okButton);
+        buttonPanel.add(cancelButton);
+        panel.add(buttonPanel);
+
+        // Handle enter key
+        pinField.addActionListener(e -> {
+            result[0] = new String(pinField.getPassword());
+            dialog.dispose();
+        });
+
+        System.out.println("[NetworkManager] Showing PIN dialog...");
+        dialog.setVisible(true);
+        System.out.println("[NetworkManager] PIN dialog closed, result=" + (result[0] != null ? "PIN entered" : "cancelled"));
+
+        return result[0];
+    }
+
+    /**
+     * Gets the remaining attempts (kept for API compatibility).
+     */
+    public int getLastRemainingAttempts() {
+        return 3;
     }
 
     // ==================== Stream Initialization ====================
@@ -551,6 +847,18 @@ public class NetworkManager {
                                 });
                             }
                         } catch (NumberFormatException e) { }
+                        continue;
+                    }
+
+                    // Handle Dead Man's Switch alert
+                    if (receivedLine.startsWith("DEAD_MAN_SWITCH:")) {
+                        String fromUser = receivedLine.substring(16);
+                        System.out.println("[NetworkManager] Dead Man's Switch alert from: " + fromUser);
+                        if (onDeadMansSwitch != null) {
+                            javax.swing.SwingUtilities.invokeLater(() -> {
+                                onDeadMansSwitch.accept(fromUser);
+                            });
+                        }
                         continue;
                     }
 
@@ -736,6 +1044,27 @@ public class NetworkManager {
             return true;
         } catch (IOException e) {
             System.err.println("[NetworkManager] Send path remove error: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Sends a Dead Man's Switch alert to the connected peer.
+     * @param fromUser The username sending the alert
+     * @return true if sent successfully
+     */
+    public synchronized boolean sendDeadMansSwitchAlert(String fromUser) {
+        if (!connected.get() || writer == null) {
+            return false;
+        }
+        try {
+            writer.write("DEAD_MAN_SWITCH:" + fromUser);
+            writer.newLine();
+            writer.flush();
+            System.out.println("[NetworkManager] Sent Dead Man's Switch alert");
+            return true;
+        } catch (IOException e) {
+            System.err.println("[NetworkManager] Send DMS alert error: " + e.getMessage());
             return false;
         }
     }

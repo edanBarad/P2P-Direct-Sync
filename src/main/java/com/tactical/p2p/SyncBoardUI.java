@@ -46,6 +46,9 @@ public class SyncBoardUI {
     // Check-in system
     private CheckInManager checkInManager;
 
+    // Dead Man's Switch
+    private DeadMansSwitch deadMansSwitch;
+
     // Status
     private JLabel statusLabel;
     private JLabel roleLabel;
@@ -74,11 +77,7 @@ public class SyncBoardUI {
     }
 
     public void initialize(String role) {
-        if (!SwingUtilities.isEventDispatchThread()) {
-            SwingUtilities.invokeLater(() -> initialize(role));
-            return;
-        }
-
+        // Must be called on EDT - caller is responsible for ensuring this
         this.isHost = "HOST".equals(role);
 
         frame = new JFrame(TITLE_PREFIX + role);
@@ -107,6 +106,10 @@ public class SyncBoardUI {
         // Create Check-in tab
         JPanel checkInPanel = createCheckInPanel();
         tabbedPane.addTab("Check-in", checkInPanel);
+
+        // Create Security tab (Dead Man's Switch)
+        JPanel securityPanel = createSecurityPanel();
+        tabbedPane.addTab("Security", securityPanel);
 
         frame.add(tabbedPane, BorderLayout.CENTER);
         createStatusBar(role);
@@ -590,6 +593,65 @@ public class SyncBoardUI {
         return panel;
     }
 
+    // ==================== Security Panel (Dead Man's Switch) ====================
+
+    /**
+     * Creates the Security panel with Dead Man's Switch.
+     * The switch is an emergency alert system - hold spacebar to arm,
+     * release triggers alert to peer after 3-second grace period.
+     */
+    private JPanel createSecurityPanel() {
+        JPanel panel = new JPanel(new BorderLayout(10, 10));
+        panel.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+
+        // Create Dead Man's Switch instance
+        deadMansSwitch = new DeadMansSwitch();
+        deadMansSwitch.setAuditLogger(auditLogger);
+
+        // Get the indicator panel
+        JPanel switchPanel = deadMansSwitch.createIndicatorPanel();
+        panel.add(switchPanel, BorderLayout.NORTH);
+
+        // Instructions panel
+        JPanel instructionsPanel = new JPanel(new GridLayout(5, 1, 5, 5));
+        instructionsPanel.setBorder(BorderFactory.createTitledBorder("Instructions"));
+
+        instructionsPanel.add(new JLabel("1. Hold SPACEBAR to arm the switch"));
+        instructionsPanel.add(new JLabel("2. Keep holding while operating normally"));
+        instructionsPanel.add(new JLabel("3. If released, you have 3 seconds to re-press"));
+        instructionsPanel.add(new JLabel("4. After 3 seconds, alert is sent to your peer"));
+        instructionsPanel.add(new JLabel("5. Use for duress situations or emergency alerts"));
+
+        panel.add(instructionsPanel, BorderLayout.CENTER);
+
+        // Warning label
+        JLabel warningLabel = new JLabel("WARNING: Only use in genuine emergency situations!");
+        warningLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        warningLabel.setForeground(Color.RED);
+        warningLabel.setFont(new Font("Arial", Font.BOLD, 12));
+        panel.add(warningLabel, BorderLayout.SOUTH);
+
+        // Set up callbacks for the switch
+        // When alert is triggered, send to peer
+        deadMansSwitch.setOnAlertTriggered(msg -> {
+            String from = isHost ? "Host" : "Client";
+            addAlertMessage("DEAD MAN'S SWITCH", "Alert triggered by " + from + "!", isHost);
+
+            if (networkManager.isConnected()) {
+                networkManager.sendDeadMansSwitchAlert(from);
+            }
+        });
+
+        // Attach key listener to frame (will be done after frame is visible)
+        SwingUtilities.invokeLater(() -> {
+            if (frame != null) {
+                deadMansSwitch.attachToComponent(frame, frame);
+            }
+        });
+
+        return panel;
+    }
+
     // ==================== Status Bar ====================
 
     private void createStatusBar(String role) {
@@ -699,6 +761,18 @@ public class SyncBoardUI {
                 mapScreen.addRemoteEdge(edgeMsg.getX1(), edgeMsg.getY1(),
                     edgeMsg.getX2(), edgeMsg.getY2());
                 auditLogger.log(AuditLogger.EventType.EDGE_ADDED, "Remote edge added");
+            }
+        });
+
+        // Handle Dead Man's Switch alerts from peer
+        networkManager.setOnDeadMansSwitch(fromUser -> {
+            addAlertMessage("EMERGENCY ALERT",
+                "Dead Man's Switch triggered by " + fromUser + "! Operator may be compromised!",
+                !isHost);
+
+            // Trigger the visual alarm on our switch
+            if (deadMansSwitch != null) {
+                deadMansSwitch.receiveAlert(fromUser);
             }
         });
 

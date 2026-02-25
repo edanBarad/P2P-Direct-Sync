@@ -25,12 +25,18 @@ import java.util.function.Consumer;
  * │                    (Observer Pattern)                              │
  * └─────────────────────────────────────────────────────────────────────┘
  *
+ * Authentication Flow:
+ * - HOST: Sets 4-digit PIN on startup → validates client PIN attempts
+ * - CLIENT: Must enter correct PIN within 3 attempts to connect
+ *
  * SOLID Principles Applied:
  *
  * 1. Single Responsibility (SRP):
  *    - StateModel: Holds and notifies of state changes
- *    - NetworkManager: Handles all socket I/O
+ *    - NetworkManager: Handles all socket I/O and authentication
  *    - SyncBoardUI: Manages Swing UI and user input
+ *    - AuthManager: Handles PIN validation and attempt tracking
+ *    - DeadMansSwitch: Handles emergency alert system
  *    - App: Entry point and dependency wiring
  *
  * 2. Open/Closed (OCP):
@@ -47,27 +53,10 @@ import java.util.function.Consumer;
  *    - High-level modules (SyncBoardUI) don't create low-level modules
  *    - Dependencies are injected via constructor
  *
- * Threading Model:
- * ┌──────────────────────────────────────────────────────────────────────┐
- * │ Main Thread                                                          │
- * │   └─► App.main() creates StateModel, NetworkManager, SyncBoardUI    │
- * │       then blocks on SwingUtilities.invokeLater()                    │
- * ├──────────────────────────────────────────────────────────────────────┤
- * │ Event Dispatch Thread (EDT)                                          │
- * │   └─► All Swing UI operations                                       │
- * │   └─► DocumentListener callbacks (user typing)                       │
- * │   └─► StateChangeListener callbacks (network → UI updates)           │
- * ├──────────────────────────────────────────────────────────────────────┤
- * │ Network Threads (background, daemon)                                 │
- * │   └─► P2P-Host-Thread: ServerSocket.accept() blocking call          │
- * │   └─► P2P-Client-Thread: Socket.connect() blocking call             │
- * │   └─► P2P-Receiver-Thread: BufferedReader.readLine() loop           │
- * └──────────────────────────────────────────────────────────────────────┘
- *
  * Usage:
  *   Run the application. A dialog will appear asking to select HOST or CLIENT mode.
- *   - HOST: Starts a server on port 8888, waits for a client to connect
- *   - CLIENT: Connects to localhost:8888
+ *   - HOST: Sets PIN, starts a server on port 8888, waits for a client to connect
+ *   - CLIENT: Connects to localhost:8888, must authenticate with PIN
  *
  *   Once connected, text typed in the bottom panel is sent to the peer's top panel.
  */
@@ -89,8 +78,8 @@ public class App {
      */
     public static void main(String[] args) {
         System.out.println("===========================================");
-        System.out.println("  P2P Shared Board - Phase 1 PoC");
-        System.out.println("  Tactical OLAR Device Simulation");
+        System.out.println("  P2P Shared Board - Tactical Security");
+        System.out.println("  Military/Security Operations System");
         System.out.println("===========================================");
 
         // Set system look and feel for native appearance
@@ -184,8 +173,8 @@ public class App {
         JLabel titleLabel = new JLabel("Select Connection Mode:", JLabel.CENTER);
         titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 14f));
 
-        JLabel hostLabel = new JLabel("HOST: Start a server and wait for a client to connect");
-        JLabel clientLabel = new JLabel("CLIENT: Connect to an existing host server");
+        JLabel hostLabel = new JLabel("HOST: Set PIN, start server, wait for client");
+        JLabel clientLabel = new JLabel("CLIENT: Connect to host and authenticate with PIN");
 
         panel.add(titleLabel);
         panel.add(hostLabel);
@@ -210,23 +199,99 @@ public class App {
         // Step 1: Create the shared state model (singleton for this app)
         StateModel stateModel = new StateModel();
 
-        // Step 2: Create the network manager with state model dependency
-        NetworkManager networkManager = new NetworkManager(stateModel);
+        // Step 2: Create the authentication manager
+        AuthManager authManager = new AuthManager();
 
-        // Step 3: Create the UI with injected dependencies
+        // Step 3: For HOST mode, show PIN setup dialog first
+        if ("HOST".equals(mode)) {
+            boolean pinSet = authManager.showPinSetupDialog(null);
+            if (!pinSet) {
+                System.out.println("[App] PIN setup cancelled, exiting.");
+                System.exit(0);
+                return;
+            }
+        }
+
+        // Step 4: Create the network manager with state model dependency
+        NetworkManager networkManager = new NetworkManager(stateModel);
+        networkManager.setAuthManager(authManager);
+
+        // Step 5: Create the UI with injected dependencies
         SyncBoardUI ui = new SyncBoardUI(stateModel, networkManager);
 
-        // Step 4: Initialize the UI (creates frame, panels, etc.)
-        ui.initialize(mode);
+        // Step 6: Set up authentication callbacks BEFORE initializing UI
+        setupAuthCallbacks(networkManager, authManager, ui, mode);
 
-        // Step 5: Start networking based on mode
-        if ("HOST".equals(mode)) {
-            startHostMode(networkManager);
+        // Step 7: Initialize the UI (creates frame, panels, etc.)
+        // This must complete before starting network
+        if (SwingUtilities.isEventDispatchThread()) {
+            ui.initialize(mode);
         } else {
-            startClientMode(networkManager);
+            try {
+                SwingUtilities.invokeAndWait(() -> ui.initialize(mode));
+            } catch (Exception e) {
+                System.err.println("[App] Error initializing UI: " + e.getMessage());
+                return;
+            }
+        }
+
+        // Step 8: Set parent frame for dialogs (after UI is initialized)
+        networkManager.setParentFrame(ui.getFrame());
+
+        // Step 9: Start networking based on mode
+        if ("HOST".equals(mode)) {
+            startHostMode(networkManager, ui);
+        } else {
+            startClientMode(networkManager, ui);
         }
 
         System.out.println("[App] Initialization complete");
+    }
+
+    // ==================== Authentication Callbacks ====================
+
+    /**
+     * Sets up authentication callbacks between network manager and UI.
+     * Uses Observer pattern to notify UI of authentication events.
+     */
+    private static void setupAuthCallbacks(NetworkManager nm, AuthManager auth,
+                                            SyncBoardUI ui, String mode) {
+
+        if ("HOST".equals(mode)) {
+            // Host receives auth attempt notifications
+            nm.setOnAuthAttempt(attemptInfo -> {
+                // Format: pin:RESULT:remaining
+                String[] parts = attemptInfo.split(":");
+                if (parts.length >= 3) {
+                    String pin = parts[0];
+                    String result = parts[1];
+                    int remaining = Integer.parseInt(parts[2]);
+
+                    if ("FAIL".equals(result)) {
+                        // Show alert dialog to host
+                        JOptionPane.showMessageDialog(ui.getFrame(),
+                            "Failed authentication attempt!\n" +
+                            "PIN tried: " + pin + "\n" +
+                            "Attempts remaining: " + remaining,
+                            "Security Alert",
+                            JOptionPane.WARNING_MESSAGE);
+
+                        ui.addSystemMessage("[SECURITY] Failed auth attempt. PIN: " + pin +
+                            ". " + remaining + " attempts remaining.");
+
+                        if (remaining <= 0) {
+                            ui.addAlertMessage("SECURITY ALERT",
+                                "Client blocked after 3 failed attempts!", true);
+                        }
+                    } else if ("SUCCESS".equals(result)) {
+                        ui.addSystemMessage("[SECURITY] Client authenticated successfully.");
+                    }
+                }
+            });
+        } else {
+            // Client authentication is now handled internally by NetworkManager
+            // No callbacks needed - it uses blocking dialogs
+        }
     }
 
     // ==================== Mode Starters ====================
@@ -236,9 +301,11 @@ public class App {
      * Opens a ServerSocket and waits for client connections.
      *
      * @param networkManager The network manager instance
+     * @param ui The UI instance for status updates
      */
-    private static void startHostMode(NetworkManager networkManager) {
+    private static void startHostMode(NetworkManager networkManager, SyncBoardUI ui) {
         System.out.println("[App] Starting HOST mode on port " + DEFAULT_PORT);
+        ui.addSystemMessage("Waiting for client connection on port " + DEFAULT_PORT + "...");
         networkManager.startHost(DEFAULT_PORT);
     }
 
@@ -247,9 +314,11 @@ public class App {
      * Attempts to connect to the host server.
      *
      * @param networkManager The network manager instance
+     * @param ui The UI instance for status updates
      */
-    private static void startClientMode(NetworkManager networkManager) {
+    private static void startClientMode(NetworkManager networkManager, SyncBoardUI ui) {
         System.out.println("[App] Starting CLIENT mode, connecting to " + DEFAULT_HOST + ":" + DEFAULT_PORT);
+        ui.addSystemMessage("Connecting to " + DEFAULT_HOST + ":" + DEFAULT_PORT + "...");
         networkManager.startClient(DEFAULT_HOST, DEFAULT_PORT);
     }
 }
