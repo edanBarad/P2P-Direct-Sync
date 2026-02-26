@@ -65,8 +65,11 @@ public class App {
     /** Default port for P2P communication */
     private static final int DEFAULT_PORT = 8888;
 
-    /** Host address for client connection */
+    /** Default host address for client connection (localhost for testing) */
     private static final String DEFAULT_HOST = "127.0.0.1";
+
+    /** Stores the host address for client mode (can be changed via dialog) */
+    private static String clientHostAddress = DEFAULT_HOST;
 
     // ==================== Main Entry Point ====================
 
@@ -74,7 +77,9 @@ public class App {
      * Application entry point.
      * Creates the mode selection dialog and initializes the application.
      *
-     * @param args Command line arguments: "host" or "client" to skip dialog
+     * @param args Command line arguments:
+     *             - "host" or "server": Start in host mode
+     *             - "client [hostname]": Start in client mode, optionally with host address
      */
     public static void main(String[] args) {
         System.out.println("===========================================");
@@ -85,21 +90,30 @@ public class App {
         // Set system look and feel for native appearance
         setLookAndFeel();
 
-        // Check for command-line mode selection
+        // Parse command-line arguments
         String mode = null;
+        String hostArg = null;
+
         if (args.length > 0) {
             String arg = args[0].toLowerCase();
             if ("host".equals(arg) || "server".equals(arg)) {
                 mode = "HOST";
             } else if ("client".equals(arg)) {
                 mode = "CLIENT";
+                // Check if host address is provided as second argument
+                if (args.length > 1) {
+                    hostArg = args[1];
+                }
             }
         }
 
         // Show mode selection dialog on EDT if no command-line arg
         final String selectedMode = mode;
+        final String providedHost = hostArg;
         SwingUtilities.invokeLater(() -> {
             String finalMode = selectedMode;
+
+            // Show mode selection dialog if no command-line mode specified
             if (finalMode == null) {
                 finalMode = showModeSelectionDialog();
             }
@@ -107,6 +121,20 @@ public class App {
             if (finalMode == null) {
                 System.out.println("[App] No mode selected, exiting.");
                 return;
+            }
+
+            // For CLIENT mode, show host address dialog if not provided via CLI
+            if ("CLIENT".equals(finalMode)) {
+                String host = providedHost;
+                if (host == null) {
+                    // Show dialog to get host address from user
+                    host = showHostAddressDialog();
+                    if (host == null) {
+                        System.out.println("[App] No host address provided, exiting.");
+                        return;
+                    }
+                }
+                clientHostAddress = host;
             }
 
             // Initialize and start the application
@@ -181,6 +209,55 @@ public class App {
         panel.add(clientLabel);
 
         return panel;
+    }
+
+    // ==================== Host Address Dialog ====================
+
+    /**
+     * Shows a dialog for the user to enter the host IP address when in CLIENT mode.
+     * This allows connecting to a remote host over the network instead of only localhost.
+     *
+     * @return The host IP address entered by user, or null if cancelled
+     */
+    private static String showHostAddressDialog() {
+        // Create panel with input field and helpful labels
+        JPanel panel = new JPanel(new BorderLayout(10, 10));
+        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        // Instructions
+        JLabel instructionLabel = new JLabel("<html>Enter the IP address or hostname of the server you want to connect to.<br><br>" +
+            "For local testing, use: <b>127.0.0.1</b> or <b>localhost</b></html>");
+        panel.add(instructionLabel, BorderLayout.NORTH);
+
+        // Input field with default value
+        JTextField hostField = new JTextField(DEFAULT_HOST, 20);
+        hostField.selectAll(); // Pre-select text for easy replacement
+        panel.add(hostField, BorderLayout.CENTER);
+
+        // Help text showing how to find your IP
+        JLabel helpLabel = new JLabel("<html><i>Tip: On the host machine, run 'ipconfig' (Windows) or 'ifconfig'/'ip addr' (Linux/Mac)<br>" +
+            "to find its IP address on your network.</i></html>");
+        helpLabel.setFont(helpLabel.getFont().deriveFont(10f));
+        panel.add(helpLabel, BorderLayout.SOUTH);
+
+        int result = JOptionPane.showConfirmDialog(
+            null,
+            panel,
+            "Enter Host Address",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.PLAIN_MESSAGE
+        );
+
+        if (result != JOptionPane.OK_OPTION) {
+            return null;
+        }
+
+        String host = hostField.getText().trim();
+        if (host.isEmpty()) {
+            return DEFAULT_HOST;
+        }
+
+        return host;
     }
 
     // ==================== Application Initialization ====================
@@ -317,8 +394,8 @@ public class App {
      * @param ui The UI instance for status updates
      */
     private static void startClientMode(NetworkManager networkManager, SyncBoardUI ui) {
-        System.out.println("[App] Starting CLIENT mode, connecting to " + DEFAULT_HOST + ":" + DEFAULT_PORT);
-        ui.addSystemMessage("Connecting to " + DEFAULT_HOST + ":" + DEFAULT_PORT + "...");
-        networkManager.startClient(DEFAULT_HOST, DEFAULT_PORT);
+        System.out.println("[App] Starting CLIENT mode, connecting to " + clientHostAddress + ":" + DEFAULT_PORT);
+        ui.addSystemMessage("Connecting to " + clientHostAddress + ":" + DEFAULT_PORT + "...");
+        networkManager.startClient(clientHostAddress, DEFAULT_PORT);
     }
 }

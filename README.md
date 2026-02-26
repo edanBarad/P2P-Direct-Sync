@@ -130,19 +130,96 @@ Records all security-relevant events with timestamps:
 javac -d target/classes src/main/java/com/tactical/p2p/*.java
 ```
 
-### Run Two Instances
+### Option 1: Run on Same Machine (Local Testing)
 
-Terminal 1 (Host):
+**Terminal 1 (Host):**
 ```bash
 java -cp target/classes com.tactical.p2p.App host
 ```
 
-Terminal 2 (Client):
+**Terminal 2 (Client):**
 ```bash
 java -cp target/classes com.tactical.p2p.App client
 ```
 
+When prompted, enter `127.0.0.1` or `localhost` as the host address.
+
 Or just run without args and pick from the GUI dialog.
+
+---
+
+### Option 2: Run Between Two Different Devices (Network)
+
+This allows you to run the Host on one computer and connect from a Client on a different computer over your local network.
+
+#### Step 1: Find the Host's IP Address
+
+**On Windows (Host machine):**
+```cmd
+ipconfig
+```
+Look for "IPv4 Address" under your active network adapter (e.g., `192.168.1.100`)
+
+**On Mac/Linux (Host machine):**
+```bash
+ifconfig
+# or
+ip addr show
+```
+Look for `inet` under your active network (e.g., `192.168.1.100`)
+
+#### Step 2: Start the Host
+
+On Device 1 (the server):
+```bash
+java -cp target/classes com.tactical.p2p.App host
+```
+
+1. A dialog will appear - set a 4-digit PIN (e.g., `1234`)
+2. The host will wait for a client connection on port 8888
+3. Note the IP address you found in Step 1
+
+#### Step 3: Start the Client
+
+On Device 2 (the client):
+```bash
+java -cp target/classes com.tactical.p2p.App client
+```
+
+Or with the host IP directly:
+```bash
+java -cp target/classes com.tactical.p2p.App client 192.168.1.100
+```
+
+1. A dialog will appear asking for the host address
+2. Enter the Host's IP address (e.g., `192.168.1.100`)
+3. Enter the PIN when prompted
+4. You should now be connected!
+
+#### Step 4: Verify Connection
+
+- Both devices should show "Status: Connected" in the status bar
+- Try sending a chat message from one device to the other
+- The Host is shown in blue, Client in red
+
+#### Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| Connection timeout | Check both devices are on the same network |
+| Connection refused | Ensure Host is running and waiting for connection |
+| Firewall blocking | Allow Java through Windows Firewall or disable temporarily |
+| Wrong IP | Verify IP with `ipconfig` / `ifconfig` - use the local network IP, not public IP |
+| PIN rejected | Host sets the PIN on startup - make sure you enter the same PIN |
+
+#### Command-Line Reference
+
+| Command | Description |
+|---------|-------------|
+| `java -cp target/classes com.tactical.p2p.App` | Show mode selection dialog |
+| `java -cp target/classes com.tactical.p2p.App host` | Start as Host (skip dialog) |
+| `java -cp target/classes com.tactical.p2p.App client` | Start as Client, show host address dialog |
+| `java -cp target/classes com.tactical.p2p.App client 192.168.1.100` | Start as Client connecting to specific IP |
 
 ---
 
