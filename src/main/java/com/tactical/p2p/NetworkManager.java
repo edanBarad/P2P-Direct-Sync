@@ -620,15 +620,12 @@ public class NetworkManager {
             // Request PIN from UI (blocking)
             final int finalRemaining = remainingAttempts;
             final String[] pinHolder = new String[1];
-            final boolean[] cancelled = {false};
 
             // Use invokeAndWait to block until user responds
+            // requestPinFromUI shows its own dialog, no callback needed
             try {
                 SwingUtilities.invokeAndWait(() -> {
-                    if (onAuthRequired != null) {
-                        // Signal UI to show dialog
-                        pinHolder[0] = requestPinFromUI(finalRemaining);
-                    }
+                    pinHolder[0] = requestPinFromUI(finalRemaining);
                 });
             } catch (Exception e) {
                 System.err.println("[NetworkManager] Error requesting PIN: " + e.getMessage());
