@@ -708,7 +708,13 @@ public class SyncBoardUI {
     private void createStatusBar(String role) {
         JPanel statusPanel = new JPanel(new BorderLayout());
         statusPanel.setPreferredSize(new Dimension(0, STATUS_BAR_HEIGHT));
-        statusPanel.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
+
+        // Create compound border: top separator line + padding
+        // This replaces the separate JSeparator that was being overwritten
+        statusPanel.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(1, 0, 0, 0, Color.GRAY),  // Top separator line
+            BorderFactory.createEmptyBorder(5, 10, 5, 10)              // Inner padding
+        ));
 
         statusLabel = new JLabel("Status: Disconnected");
         statusLabel.setForeground(Color.GRAY);
@@ -719,8 +725,9 @@ public class SyncBoardUI {
         statusPanel.add(statusLabel, BorderLayout.WEST);
         statusPanel.add(roleLabel, BorderLayout.EAST);
 
-        frame.add(new JSeparator(JSeparator.HORIZONTAL), BorderLayout.SOUTH);
-        frame.add(statusPanel, BorderLayout.PAGE_END);
+        // Add status panel to the bottom of the frame
+        // (previously had a JSeparator added to SOUTH which was overwritten)
+        frame.add(statusPanel, BorderLayout.SOUTH);
     }
 
     // ==================== Network Callbacks ====================
