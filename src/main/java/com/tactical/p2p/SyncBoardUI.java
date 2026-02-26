@@ -118,6 +118,9 @@ public class SyncBoardUI {
         JPanel auditPanel = createAuditPanel();
         tabbedPane.addTab("Audit Log", auditPanel);
 
+        // Set up auto-refresh for audit log when new entries are added
+        auditLogger.setOnEntryAdded(() -> SwingUtilities.invokeLater(() -> updateLogDisplay()));
+
         // Create Check-in tab
         JPanel checkInPanel = createCheckInPanel();
         tabbedPane.addTab("Check-in", checkInPanel);

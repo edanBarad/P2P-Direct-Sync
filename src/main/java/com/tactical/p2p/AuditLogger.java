@@ -16,8 +16,19 @@ public class AuditLogger {
     private final List<LogEntry> entries = new ArrayList<>();
     private final String role;
 
+    /** Callback to notify when new entries are added (for auto-refresh) */
+    private Runnable onEntryAdded;
+
     public AuditLogger(String role) {
         this.role = role;
+    }
+
+    /**
+     * Sets a callback to be notified when a new log entry is added.
+     * @param callback Runnable to execute when entry is added
+     */
+    public void setOnEntryAdded(Runnable callback) {
+        this.onEntryAdded = callback;
     }
 
     public enum EventType {
@@ -65,6 +76,11 @@ public class AuditLogger {
         LogEntry entry = new LogEntry(type, description, details);
         entries.add(entry);
         System.out.println("[AUDIT] " + entry);
+
+        // Notify listener (for auto-refresh in UI)
+        if (onEntryAdded != null) {
+            onEntryAdded.run();
+        }
     }
 
     public List<LogEntry> getEntries() {
