@@ -834,6 +834,12 @@ public class SyncBoardUI {
             }
         });
 
+        // Handle peer disconnect notification - shows message when peer closes connection
+        networkManager.setOnPeerDisconnected(() -> {
+            addSystemMessage("[System] Peer has disconnected from the session.");
+            addAlertMessage("DISCONNECTED", "Connection to peer has been lost.", isHost);
+        });
+
         // Handle status
         networkManager.setOnStatusChanged(status -> updateConnectionStatus(status));
     }

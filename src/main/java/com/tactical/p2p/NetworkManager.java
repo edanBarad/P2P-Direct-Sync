@@ -107,6 +107,9 @@ public class NetworkManager {
     /** Callback invoked when Dead Man's Switch alert is received */
     private Consumer<String> onDeadMansSwitch;
 
+    /** Callback invoked when peer disconnects (graceful or unexpected) */
+    private Runnable onPeerDisconnected;
+
     /** Reference to the shared state model */
     private final StateModel stateModel;
 
@@ -373,6 +376,14 @@ public class NetworkManager {
      */
     public void setOnDeadMansSwitch(Consumer<String> callback) {
         this.onDeadMansSwitch = callback;
+    }
+
+    /**
+     * Sets the callback for peer disconnect notifications.
+     * Called when the peer sends a disconnect message or when connection is lost.
+     */
+    public void setOnPeerDisconnected(Runnable callback) {
+        this.onPeerDisconnected = callback;
     }
 
     /**
@@ -796,6 +807,19 @@ public class NetworkManager {
                         continue;
                     }
 
+                    // Handle graceful disconnect message from peer
+                    if (receivedLine.equals("DISCONNECT")) {
+                        System.out.println("[NetworkManager] Peer sent disconnect notification");
+                        // Notify UI about graceful disconnect
+                        if (onPeerDisconnected != null) {
+                            javax.swing.SwingUtilities.invokeLater(() -> {
+                                onPeerDisconnected.run();
+                            });
+                        }
+                        // Exit the receiver loop - peer is gone
+                        break;
+                    }
+
                     // Check if this is a point message
                     if (receivedLine.startsWith("POINT:")) {
                         PointMessage pointMsg = PointMessage.deserialize(receivedLine);
@@ -871,18 +895,38 @@ public class NetworkManager {
                     }
                 }
 
-                // readLine() returned null - connection closed by peer
+                // readLine() returned null - connection closed by peer (unexpectedly or without DISCONNECT)
                 System.out.println("[NetworkManager] Connection closed by peer");
                 notifyStatusChanged(ConnectionStatus.DISCONNECTED);
+
+                // Notify UI about unexpected disconnect if we were still running
+                if (running.get() && onPeerDisconnected != null) {
+                    javax.swing.SwingUtilities.invokeLater(() -> {
+                        onPeerDisconnected.run();
+                    });
+                }
 
             } catch (SocketException e) {
                 if (running.get()) {
                     System.out.println("[NetworkManager] Socket closed: " + e.getMessage());
+                    // Notify about unexpected disconnect
+                    notifyStatusChanged(ConnectionStatus.ERROR);
+                    if (onPeerDisconnected != null) {
+                        javax.swing.SwingUtilities.invokeLater(() -> {
+                            onPeerDisconnected.run();
+                        });
+                    }
                 }
             } catch (IOException e) {
                 if (running.get()) {
                     System.err.println("[NetworkManager] Receiver error: " + e.getMessage());
                     notifyStatusChanged(ConnectionStatus.ERROR);
+                    // Notify about unexpected disconnect
+                    if (onPeerDisconnected != null) {
+                        javax.swing.SwingUtilities.invokeLater(() -> {
+                            onPeerDisconnected.run();
+                        });
+                    }
                 }
             } finally {
                 connected.set(false);
@@ -1064,6 +1108,30 @@ public class NetworkManager {
         }
     }
 
+    /**
+     * Sends a graceful disconnect notification to the peer.
+     * This allows the peer to know we're intentionally disconnecting
+     * rather than having a network failure.
+     *
+     * @return true if sent successfully
+     */
+    private synchronized boolean sendDisconnectNotification() {
+        if (!connected.get() || writer == null) {
+            return false;
+        }
+        try {
+            writer.write("DISCONNECT");
+            writer.newLine();
+            writer.flush();
+            System.out.println("[NetworkManager] Sent disconnect notification to peer");
+            return true;
+        } catch (IOException e) {
+            // Connection may already be closed - this is fine
+            System.out.println("[NetworkManager] Could not send disconnect notification: " + e.getMessage());
+            return false;
+        }
+    }
+
     // ==================== Status Notifications ====================
 
     /**
@@ -1142,6 +1210,9 @@ public class NetworkManager {
      */
     public void shutdown() {
         System.out.println("[NetworkManager] Shutting down...");
+
+        // Send disconnect notification to peer before closing (graceful disconnect)
+        sendDisconnectNotification();
 
         running.set(false);
         cleanup();
