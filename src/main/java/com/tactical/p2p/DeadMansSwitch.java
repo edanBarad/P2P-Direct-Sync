@@ -276,11 +276,18 @@ public class DeadMansSwitch {
         alertLabel.setForeground(Color.WHITE);
         alertLabel.setFont(new Font("Arial", Font.BOLD, 24));
 
+        // Create timers before the button listener so they can be stopped on acknowledge
+        final Timer flashTimer = new Timer(300, null);
+        final Timer beepTimer = new Timer(500, e -> Toolkit.getDefaultToolkit().beep());
+
         JButton ackButton = new JButton("ACKNOWLEDGE ALERT");
         ackButton.setFont(new Font("Arial", Font.BOLD, 18));
         ackButton.setBackground(Color.WHITE);
         ackButton.setForeground(Color.RED);
         ackButton.addActionListener(e -> {
+            // Stop timers when alert is acknowledged via button (fixes timer leak)
+            flashTimer.stop();
+            beepTimer.stop();
             alertDialog.dispose();
             if (auditLogger != null) {
                 auditLogger.log(AuditLogger.EventType.ALERT_ACKNOWLEDGED,
@@ -296,7 +303,6 @@ public class DeadMansSwitch {
         alertDialog.setLocationRelativeTo(parentFrame);
 
         // Flash effect
-        Timer flashTimer = new Timer(300, null);
         final int[] count = {0};
         flashTimer.addActionListener(e -> {
             panel.setBackground(count[0] % 2 == 0 ? Color.RED : new Color(139, 0, 0));
@@ -304,11 +310,11 @@ public class DeadMansSwitch {
         });
         flashTimer.start();
 
-        // Sound alarm
+        // Sound alarm - initial beep then timer-controlled beeps
         Toolkit.getDefaultToolkit().beep();
-        Timer beepTimer = new Timer(500, e -> Toolkit.getDefaultToolkit().beep());
         beepTimer.start();
 
+        // Also stop timers if dialog is closed via window X button
         alertDialog.addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosed(WindowEvent e) {
