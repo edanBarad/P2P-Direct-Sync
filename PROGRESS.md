@@ -4,7 +4,30 @@ This file tracks the development progress of the P2P Tactical Board application.
 
 ---
 
-## 2026-02-26 - Bug Fix Session
+## 2026-02-26 - Bug Fix Session (Continued)
+
+### Summary
+After initial testing, discovered and fixed 2 additional bugs during live testing session.
+
+### Bugs Fixed (Round 2)
+11. **Client PIN dialog not showing** - The PIN entry dialog was wrapped in an unnecessary `onAuthRequired != null` check, but the callback was never set. Removed the redundant check since `requestPinFromUI()` handles the dialog internally.
+12. **Audit Log not auto-refreshing** - The log tab only updated when clicking Refresh. Added `setOnEntryAdded()` callback to AuditLogger so the UI auto-updates when new entries are logged.
+
+### Files Modified
+- `NetworkManager.java` - Removed unnecessary callback check for PIN dialog
+- `AuditLogger.java` - Added `onEntryAdded` callback mechanism
+- `SyncBoardUI.java` - Registered callback to auto-refresh log display
+
+### Testing Results
+- ✅ Host PIN setup works
+- ✅ Client PIN entry dialog now appears
+- ✅ Authentication flow completes successfully
+- ✅ Audit Log auto-refreshes on new events
+- ✅ Chat messages work bidirectionally
+
+---
+
+## 2026-02-26 - Bug Fix Session (Initial)
 
 ### Summary
 Completed a comprehensive bug fix session, resolving 10 issues identified during code review.
@@ -22,23 +45,24 @@ Completed a comprehensive bug fix session, resolving 10 issues identified during
 10. **Potential NPE in CheckInManager** - Added null checks for countdownTimer
 
 ### Files Modified
-- `SyncBoardUI.java` - Message deletion, timer cleanup, disconnect handling, status bar
+- `SyncBoardUI.java` - Message deletion, timer cleanup, disconnect handling, status bar, auto-refresh
 - `DeadMansSwitch.java` - EDT compliance, timer cleanup
 - `AuthManager.java` - Counter logic fix
-- `NetworkManager.java` - Dead code removal, disconnect protocol
+- `NetworkManager.java` - Dead code removal, disconnect protocol, PIN dialog fix
 - `CheckInManager.java` - Null safety
 - `App.java` - Remote host dialog support
+- `AuditLogger.java` - Auto-refresh callback
 - `README.md` - Network connection instructions
 
-### Commits
-- 10 commits total, all with descriptive messages
+### Total Commits
+- 13 commits total
 
 ### Recommendations for Next Steps
-1. **Testing** - Manual testing of all fixed features, especially:
+1. **Testing** - Test remaining features:
    - Self-destructing messages across network
-   - Graceful disconnect (both sides)
-   - Remote host connection between two devices
-   - Dead Man's Switch with timer cleanup
+   - Dead Man's Switch trigger and acknowledgment
+   - Remote host connection between two different devices
+   - Check-in system
 
 2. **Unit Tests** - Add JUnit tests for:
    - AuthManager validation logic
