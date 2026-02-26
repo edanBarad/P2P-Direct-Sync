@@ -323,7 +323,7 @@ public class DeadMansSwitch {
     private void showTriggeredAlarm() {
         if (parentFrame == null) return;
 
-        // Flash the main frame
+        // Flash the main frame background (non-blocking using Swing Timer)
         Timer flashTimer = new Timer(200, null);
         final int[] count = {0};
         final Color original = parentFrame.getBackground();
@@ -342,13 +342,17 @@ public class DeadMansSwitch {
         });
         flashTimer.start();
 
-        // Continuous beep
-        for (int i = 0; i < 5; i++) {
-            try {
-                Thread.sleep(200);
-                Toolkit.getDefaultToolkit().beep();
-            } catch (InterruptedException ignored) {}
-        }
+        // Continuous beep - use Swing Timer instead of Thread.sleep() to avoid blocking EDT
+        // Previously this used a for loop with Thread.sleep() which froze the UI
+        final int[] beepCount = {0};
+        Timer beepTimer = new Timer(200, beepEvent -> {
+            Toolkit.getDefaultToolkit().beep();
+            beepCount[0]++;
+            if (beepCount[0] >= 5) {
+                ((Timer) beepEvent.getSource()).stop();
+            }
+        });
+        beepTimer.start();
     }
 
     /**
