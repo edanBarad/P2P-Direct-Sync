@@ -138,7 +138,10 @@ public class CheckInManager {
      * Handle missed check-in.
      */
     private void handleMissedCheckIn() {
-        countdownTimer.stop();
+        // Null check - timer could be null if stop() was called just before this
+        if (countdownTimer != null) {
+            countdownTimer.stop();
+        }
         checkInButton.setEnabled(false);
         statusLabel.setText("⚠ MISSED CHECK-IN!");
         statusLabel.setForeground(Color.RED);
@@ -160,9 +163,11 @@ public class CheckInManager {
             if (count[0] >= 10) {
                 flashTimer.stop();
                 statusLabel.setBackground(null);
-                // Reset after alert
+                // Reset after alert - create new timer if needed
                 secondsRemaining = intervalSeconds;
-                countdownTimer.start();
+                if (countdownTimer != null) {
+                    countdownTimer.start();
+                }
                 checkInButton.setEnabled(true);
             }
         });
