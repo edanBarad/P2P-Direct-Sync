@@ -65,7 +65,22 @@ public class SyncBoardUI {
 
     // Self-destructing messages: map of id -> timer
     private Map<Integer, javax.swing.Timer> selfDestructTimers = new HashMap<>();
-    private Map<Integer, Integer> messagePositions = new HashMap<>();
+    // Stores message position info (start offset and length) for self-destruct removal
+    private Map<Integer, MessageRange> messageRanges = new HashMap<>();
+
+    /**
+     * Helper class to store the position and length of a self-destructing message.
+     * This allows us to precisely remove the message from the document when it self-destructs.
+     */
+    private static class MessageRange {
+        final int start;
+        final int length;
+
+        MessageRange(int start, int length) {
+            this.start = start;
+            this.length = length;
+        }
+    }
 
     public SyncBoardUI(StateModel stateModel, NetworkManager networkManager) {
         if (stateModel == null || networkManager == null) {
@@ -272,6 +287,10 @@ public class SyncBoardUI {
     public void addMessage(String sender, String text, boolean fromHost, String priority, int selfDestructSecs) {
         SwingUtilities.invokeLater(() -> {
             try {
+                // For self-destructing messages, capture the start position BEFORE inserting
+                // This allows us to precisely remove the message when it self-destructs
+                final int messageStart = chatDoc.getLength();
+
                 // Add sender name
                 Style senderStyle = fromHost ? hostStyle : clientStyle;
                 chatDoc.insertString(chatDoc.getLength(), sender + ": ", senderStyle);
@@ -289,23 +308,55 @@ public class SyncBoardUI {
                 // Add text
                 chatDoc.insertString(chatDoc.getLength(), text, textStyle);
 
-                // Add self-destruct indicator
+                // Handle self-destructing messages
                 if (selfDestructSecs > 0) {
+                    // Add self-destruct indicator
                     Style sdStyle = chatDoc.addStyle("SDStyle", null);
                     StyleConstants.setForeground(sdStyle, Color.GRAY);
                     StyleConstants.setFontSize(sdStyle, 10);
                     chatDoc.insertString(chatDoc.getLength(), " [SD: " + selfDestructSecs + "s]\n", sdStyle);
 
-                    // Schedule self-destruct
-                    final int messageStart = chatDoc.getLength();
-                    int messageId = System.identityHashCode(text);
+                    // Calculate the total length of this message (from start to current end)
+                    final int messageLength = chatDoc.getLength() - messageStart;
+
+                    // Generate a unique ID for this message
+                    // Use timestamp + hash to ensure uniqueness even for duplicate messages
+                    int messageId = (int) System.currentTimeMillis() + text.hashCode();
+
+                    // Store the message range so we can delete it later
+                    final int msgId = messageId;
+                    messageRanges.put(msgId, new MessageRange(messageStart, messageLength));
+
+                    // Schedule self-destruct timer
                     javax.swing.Timer timer = new javax.swing.Timer(selfDestructSecs * 1000, e -> {
+                        // Remove the message from the document
+                        SwingUtilities.invokeLater(() -> {
+                            try {
+                                MessageRange range = messageRanges.get(msgId);
+                                if (range != null) {
+                                    // Only remove if the document is still long enough
+                                    // (prevents issues if document was cleared)
+                                    if (chatDoc.getLength() >= range.start + range.length) {
+                                        chatDoc.remove(range.start, range.length);
+                                    }
+                                    // Clean up the stored range
+                                    messageRanges.remove(msgId);
+                                }
+                            } catch (BadLocationException ex) {
+                                System.err.println("[SelfDestruct] Error removing message: " + ex.getMessage());
+                            }
+                        });
+
+                        // Log the self-destruct event
                         addSystemMessage("[Message self-destructed]");
                         auditLogger.log(AuditLogger.EventType.SELF_DESTRUCT, "Message self-destructed");
+
+                        // Clean up the timer from the map
+                        selfDestructTimers.remove(msgId);
                     });
                     timer.setRepeats(false);
                     timer.start();
-                    selfDestructTimers.put(messageId, timer);
+                    selfDestructTimers.put(msgId, timer);
                 } else {
                     chatDoc.insertString(chatDoc.getLength(), "\n", chatDoc.getStyle("RegularStyle"));
                 }
@@ -821,11 +872,12 @@ public class SyncBoardUI {
         System.out.println("[SyncBoardUI] Shutting down...");
         auditLogger.log(AuditLogger.EventType.DISCONNECTION, "Application shutdown");
 
-        // Stop all self-destruct timers
+        // Stop all self-destruct timers and clean up related data
         for (javax.swing.Timer timer : selfDestructTimers.values()) {
             timer.stop();
         }
         selfDestructTimers.clear();
+        messageRanges.clear();  // Clean up message position tracking
 
         networkManager.shutdown();
         if (frame != null) {
