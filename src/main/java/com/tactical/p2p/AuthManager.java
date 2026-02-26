@@ -134,18 +134,23 @@ public class AuthManager {
      */
     public boolean validatePin(String attempt) {
         boolean success = pin != null && pin.equals(attempt);
-        int attemptNum = failedAttempts.incrementAndGet();
-
-        if (eventListener != null) {
-            eventListener.onAuthAttempt(attempt, attemptNum, success);
-        }
 
         if (success) {
+            // Successful login - reset the failed attempts counter and authenticate
+            failedAttempts.set(0);
             authenticated = true;
             if (eventListener != null) {
+                eventListener.onAuthAttempt(attempt, 0, true);
                 eventListener.onAuthSuccess();
             }
             return true;
+        }
+
+        // Failed attempt - increment the counter (only on failure!)
+        int attemptNum = failedAttempts.incrementAndGet();
+
+        if (eventListener != null) {
+            eventListener.onAuthAttempt(attempt, attemptNum, false);
         }
 
         if (attemptNum >= MAX_ATTEMPTS) {
