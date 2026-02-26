@@ -116,11 +116,6 @@ public class NetworkManager {
     /** Parent frame for dialogs */
     private java.awt.Frame parentFrame;
 
-    /** Pending connection for authentication */
-    private Socket pendingSocket;
-    private BufferedWriter pendingWriter;
-    private BufferedReader pendingReader;
-
     // ==================== Connection Status Enum ====================
 
     /**
